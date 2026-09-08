@@ -13,13 +13,17 @@ namespace Sprint0.Multiplayer
 {
     public sealed class MultiplayerGameController : MonoBehaviour
     {
+        const string GameStartedProperty = "gameStarted";
+
         public static MultiplayerGameController Instance { get; private set; }
 
         [Header("Screens")]
         [SerializeField] GameObject mainScreen;
         [SerializeField] GameObject roomBrowserScreen;
+        [SerializeField] GameObject lobbyScreen;
         [SerializeField] GameObject gameHudScreen;
         [SerializeField] GameObject settingsScreen;
+        [SerializeField] GameObject serverClosedScreen;
 
         [Header("Main")]
         [SerializeField] Button createRoomButton;
@@ -32,9 +36,13 @@ namespace Sprint0.Multiplayer
         [SerializeField] RectTransform roomListContent;
 
         [Header("Game")]
+        [SerializeField] Text lobbyPlayerCountText;
+        [SerializeField] Button lobbyStartButton;
+        [SerializeField] Button lobbyLeaveButton;
         [SerializeField] Text gameRoomText;
         [SerializeField] Button resumeButton;
         [SerializeField] Button leaveGameButton;
+        [SerializeField] Button serverClosedConfirmButton;
 
         [Header("Common")]
         [SerializeField] Text statusText;
@@ -46,43 +54,56 @@ namespace Sprint0.Multiplayer
         bool isReady;
         bool isBusy;
         bool isSettingsOpen;
+        bool isGameStarted;
         bool isRefreshingRooms;
         float nextRoomRefreshTime;
 
-        public bool CanControlPlayer => activeSession != null && !isSettingsOpen && !isBusy;
+        public bool CanControlPlayer => activeSession != null && isGameStarted && !isSettingsOpen && !isBusy;
         public int SceneBuildVersion => sceneBuildVersion;
 
         public void Configure(
             GameObject main,
             GameObject roomBrowser,
+            GameObject lobby,
             GameObject gameHud,
             GameObject settings,
+            GameObject serverClosed,
             Button createButton,
             Button browseButton,
             Button exitButton,
             Button refreshButton,
             Button browserBackButton,
             RectTransform listContent,
+            Text lobbyPlayerCount,
+            Button startLobbyButton,
+            Button leaveLobbyButton,
             Text roomText,
             Button continueButton,
             Button leaveButton,
+            Button serverClosedConfirm,
             Text commonStatus,
             Font font,
             int buildVersion)
         {
             mainScreen = main;
             roomBrowserScreen = roomBrowser;
+            lobbyScreen = lobby;
             gameHudScreen = gameHud;
             settingsScreen = settings;
+            serverClosedScreen = serverClosed;
             createRoomButton = createButton;
             openRoomBrowserButton = browseButton;
             quitButton = exitButton;
             refreshRoomsButton = refreshButton;
             roomBrowserBackButton = browserBackButton;
             roomListContent = listContent;
+            lobbyPlayerCountText = lobbyPlayerCount;
+            lobbyStartButton = startLobbyButton;
+            lobbyLeaveButton = leaveLobbyButton;
             gameRoomText = roomText;
             resumeButton = continueButton;
             leaveGameButton = leaveButton;
+            serverClosedConfirmButton = serverClosedConfirm;
             statusText = commonStatus;
             fallbackFont = font;
             sceneBuildVersion = buildVersion;
@@ -97,6 +118,7 @@ namespace Sprint0.Multiplayer
             }
 
             Instance = this;
+            EnsureLobbyScreen();
             ApplyRuntimeFont();
             BindButtons();
             BindNetworkCallbacks();
@@ -155,11 +177,17 @@ namespace Sprint0.Multiplayer
             if (activeSession != null && gameRoomText != null)
             {
                 gameRoomText.text = $"{activeSession.Name}   {activeSession.Players.Count}/{activeSession.MaxPlayers}";
+
+                if (lobbyPlayerCountText != null)
+                {
+                    lobbyPlayerCountText.text = $"현재 플레이어  {activeSession.Players.Count} / {activeSession.MaxPlayers}";
+                }
             }
         }
 
         void OnDestroy()
         {
+            UnbindSessionCallbacks(activeSession);
             UnbindNetworkCallbacks();
 
             if (Instance == this)
@@ -198,8 +226,9 @@ namespace Sprint0.Multiplayer
             }
 
             var disconnectedSession = activeSession;
+            UnbindSessionCallbacks(disconnectedSession);
             activeSession = null;
-            SetBusy(true, "네트워크 연결이 종료되었습니다.");
+            ShowServerClosedScreen();
 
             try
             {
@@ -208,11 +237,6 @@ namespace Sprint0.Multiplayer
             catch (Exception exception)
             {
                 Debug.LogWarning($"[Sprint0] Session cleanup after disconnect failed: {exception.Message}");
-            }
-            finally
-            {
-                SetBusy(false);
-                ShowMainScreen();
             }
         }
 
@@ -223,8 +247,11 @@ namespace Sprint0.Multiplayer
             quitButton.onClick.AddListener(QuitGame);
             refreshRoomsButton.onClick.AddListener(RefreshRooms);
             roomBrowserBackButton.onClick.AddListener(ShowMainScreen);
+            lobbyStartButton.onClick.AddListener(StartGameFromLobby);
+            lobbyLeaveButton.onClick.AddListener(LeaveSession);
             resumeButton.onClick.AddListener(() => SetSettingsOpen(false));
             leaveGameButton.onClick.AddListener(LeaveSession);
+            serverClosedConfirmButton.onClick.AddListener(AcknowledgeServerClosed);
         }
 
         async void CreateRoom()
@@ -244,12 +271,17 @@ namespace Sprint0.Multiplayer
                     MaxPlayers = maxPlayers,
                     IsPrivate = false,
                     IsLocked = false,
-                    Type = "Sprint0.GameSession"
+                    Type = "Sprint0.GameSession",
+                    SessionProperties = new System.Collections.Generic.Dictionary<string, SessionProperty>
+                    {
+                        [GameStartedProperty] = new SessionProperty("false")
+                    }
                 }.WithRelayNetwork();
 
                 activeSession = await MultiplayerService.Instance.CreateSessionAsync(options);
+                BindSessionCallbacks();
                 Debug.Log($"[Sprint0] Created Relay session '{activeSession.Name}'.");
-                EnterGameScreen();
+                EnterLobbyScreen();
             }
             catch (Exception exception)
             {
@@ -359,8 +391,9 @@ namespace Sprint0.Multiplayer
             try
             {
                 activeSession = await MultiplayerService.Instance.JoinSessionByIdAsync(sessionId);
+                BindSessionCallbacks();
                 Debug.Log($"[Sprint0] Joined Relay session '{activeSession.Name}'.");
-                EnterGameScreen();
+                EnterLobbyScreen();
             }
             catch (Exception exception)
             {
@@ -386,8 +419,19 @@ namespace Sprint0.Multiplayer
             try
             {
                 var sessionToLeave = activeSession;
+                UnbindSessionCallbacks(sessionToLeave);
                 activeSession = null;
-                await sessionToLeave.LeaveAsync();
+
+                if (sessionToLeave.IsHost && sessionToLeave is IHostSession hostSession)
+                {
+                    await hostSession.DeleteAsync();
+                    Debug.Log("[Sprint0] Host deleted the multiplayer session.");
+                }
+                else
+                {
+                    await sessionToLeave.LeaveAsync();
+                }
+
                 Debug.Log("[Sprint0] Left multiplayer session.");
             }
             catch (Exception exception)
@@ -410,9 +454,12 @@ namespace Sprint0.Multiplayer
         {
             mainScreen.SetActive(false);
             roomBrowserScreen.SetActive(false);
+            lobbyScreen.SetActive(false);
             gameHudScreen.SetActive(true);
             settingsScreen.SetActive(false);
+            serverClosedScreen.SetActive(false);
             isSettingsOpen = false;
+            isGameStarted = true;
             SetStatus(string.Empty);
             SetCursorForGameplay(true);
         }
@@ -426,9 +473,12 @@ namespace Sprint0.Multiplayer
 
             mainScreen.SetActive(true);
             roomBrowserScreen.SetActive(false);
+            lobbyScreen.SetActive(false);
             gameHudScreen.SetActive(false);
             settingsScreen.SetActive(false);
+            serverClosedScreen.SetActive(false);
             isSettingsOpen = false;
+            isGameStarted = false;
             SetCursorForGameplay(false);
 
             if (isReady)
@@ -447,6 +497,185 @@ namespace Sprint0.Multiplayer
             {
                 EventSystem.current.SetSelectedGameObject(open ? resumeButton.gameObject : null);
             }
+        }
+
+        void ShowServerClosedScreen()
+        {
+            mainScreen.SetActive(false);
+            roomBrowserScreen.SetActive(false);
+            lobbyScreen.SetActive(false);
+            gameHudScreen.SetActive(false);
+            settingsScreen.SetActive(false);
+            serverClosedScreen.SetActive(true);
+            isSettingsOpen = false;
+            isGameStarted = false;
+            SetStatus(string.Empty);
+            SetCursorForGameplay(false);
+
+            if (EventSystem.current != null)
+            {
+                EventSystem.current.SetSelectedGameObject(serverClosedConfirmButton.gameObject);
+            }
+        }
+
+        void AcknowledgeServerClosed()
+        {
+            serverClosedScreen.SetActive(false);
+            ShowMainScreen();
+        }
+
+        void EnterLobbyScreen()
+        {
+            mainScreen.SetActive(false);
+            roomBrowserScreen.SetActive(false);
+            lobbyScreen.SetActive(true);
+            gameHudScreen.SetActive(false);
+            settingsScreen.SetActive(false);
+            serverClosedScreen.SetActive(false);
+            isSettingsOpen = false;
+            isGameStarted = false;
+            SetStatus(string.Empty);
+            SetCursorForGameplay(false);
+
+            var isHost = activeSession != null && activeSession.IsHost;
+            lobbyStartButton.gameObject.SetActive(isHost);
+            lobbyStartButton.interactable = isHost;
+
+            if (IsSessionGameStarted())
+            {
+                HandleNetworkGameStarted();
+            }
+        }
+
+        async void StartGameFromLobby()
+        {
+            if (isBusy || activeSession == null || !activeSession.IsHost || activeSession is not IHostSession hostSession)
+            {
+                return;
+            }
+
+            SetBusy(true, "게임을 시작하는 중...");
+
+            try
+            {
+                hostSession.IsLocked = true;
+                hostSession.SetProperty(GameStartedProperty, new SessionProperty("true"));
+                await hostSession.SavePropertiesAsync();
+                HandleNetworkGameStarted();
+            }
+            catch (Exception exception)
+            {
+                HandleOnlineError("게임 시작 실패", exception);
+            }
+            finally
+            {
+                SetBusy(false);
+            }
+        }
+
+        public void HandleNetworkGameStarted()
+        {
+            if (activeSession == null || isGameStarted)
+            {
+                return;
+            }
+
+            EnterGameScreen();
+        }
+
+        void BindSessionCallbacks()
+        {
+            if (activeSession != null)
+            {
+                activeSession.SessionPropertiesChanged += OnSessionPropertiesChanged;
+                activeSession.RemovedFromSession += OnRemovedFromSession;
+                activeSession.Deleted += OnSessionDeleted;
+            }
+        }
+
+        void UnbindSessionCallbacks(ISession session)
+        {
+            if (session != null)
+            {
+                session.SessionPropertiesChanged -= OnSessionPropertiesChanged;
+                session.RemovedFromSession -= OnRemovedFromSession;
+                session.Deleted -= OnSessionDeleted;
+            }
+        }
+
+        void OnRemovedFromSession()
+        {
+            HandleSessionEndedByHost();
+        }
+
+        void OnSessionDeleted()
+        {
+            HandleSessionEndedByHost();
+        }
+
+        void HandleSessionEndedByHost()
+        {
+            if (activeSession == null)
+            {
+                return;
+            }
+
+            var endedSession = activeSession;
+            UnbindSessionCallbacks(endedSession);
+            activeSession = null;
+            isBusy = false;
+            ShowServerClosedScreen();
+            Debug.Log("[Sprint0] The host ended the multiplayer session.");
+        }
+
+        void OnSessionPropertiesChanged()
+        {
+            if (IsSessionGameStarted())
+            {
+                HandleNetworkGameStarted();
+            }
+        }
+
+        bool IsSessionGameStarted()
+        {
+            return activeSession != null
+                && activeSession.Properties != null
+                && activeSession.Properties.TryGetValue(GameStartedProperty, out var property)
+                && string.Equals(property.Value, "true", StringComparison.OrdinalIgnoreCase);
+        }
+
+        void EnsureLobbyScreen()
+        {
+            if (lobbyScreen != null && lobbyPlayerCountText != null && lobbyStartButton != null && lobbyLeaveButton != null)
+            {
+                return;
+            }
+
+            var canvas = FindFirstObjectByType<Canvas>();
+            if (canvas == null)
+            {
+                Debug.LogError("[Sprint0] Lobby UI could not be created because no Canvas exists.");
+                return;
+            }
+
+            lobbyScreen = CreateUiObject("LobbyScreen", canvas.transform);
+            var background = lobbyScreen.AddComponent<Image>();
+            background.color = new Color(0.025f, 0.04f, 0.07f, 1f);
+            SetAnchors((RectTransform)lobbyScreen.transform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+            lobbyPlayerCountText = CreateText(lobbyScreen.transform, "현재 플레이어  1 / 4", 34, TextAnchor.MiddleCenter);
+            lobbyPlayerCountText.fontStyle = FontStyle.Bold;
+            SetAnchors(lobbyPlayerCountText.rectTransform, new Vector2(0.25f, 0.54f), new Vector2(0.75f, 0.64f), Vector2.zero, Vector2.zero);
+
+            lobbyStartButton = CreateButton(lobbyScreen.transform, "시작", out var startLabel);
+            startLabel.fontSize = 28;
+            SetAnchors((RectTransform)lobbyStartButton.transform, new Vector2(0.39f, 0.41f), new Vector2(0.61f, 0.49f), Vector2.zero, Vector2.zero);
+
+            lobbyLeaveButton = CreateButton(lobbyScreen.transform, "나가기", out var leaveLabel);
+            leaveLabel.fontSize = 22;
+            lobbyLeaveButton.GetComponent<Image>().color = new Color(0.72f, 0.22f, 0.25f, 1f);
+            SetAnchors((RectTransform)lobbyLeaveButton.transform, new Vector2(0.025f, 0.90f), new Vector2(0.13f, 0.965f), Vector2.zero, Vector2.zero);
+            lobbyScreen.SetActive(false);
         }
 
         bool CanBeginOnlineAction()
@@ -473,6 +702,8 @@ namespace Sprint0.Multiplayer
             openRoomBrowserButton.interactable = interactable;
             refreshRoomsButton.interactable = interactable;
             roomBrowserBackButton.interactable = interactable;
+            lobbyStartButton.interactable = interactable && activeSession != null && activeSession.IsHost;
+            lobbyLeaveButton.interactable = interactable && activeSession != null;
         }
 
         void SetStatus(string message)

@@ -18,7 +18,7 @@ namespace Sprint0.Editor
         const string ScenePath = "Assets/Scenes/SampleScene.unity";
         const string PlayerPrefabPath = "Assets/_Project/Prefabs/NetworkPlayer.prefab";
         const string MaterialFolder = "Assets/_Project/Materials";
-        const int BuildVersion = 3;
+        const int BuildVersion = 5;
 
         static readonly Color Background = new(0.025f, 0.04f, 0.07f, 1f);
         static readonly Color Panel = new(0.055f, 0.075f, 0.11f, 0.97f);
@@ -248,6 +248,14 @@ namespace Sprint0.Editor
             SetRect((RectTransform)backButton.transform, new Vector2(0.85f, 0.87f), new Vector2(0.94f, 0.95f), Vector2.zero, Vector2.zero);
             var content = CreateRoomScrollView(browserCard.transform);
 
+            var lobby = CreateFullPanel(canvasObject.transform, "LobbyScreen", Background);
+            var lobbyPlayerCount = CreateText(lobby.transform, "현재 플레이어  1 / 4", font, 34, FontStyle.Bold, TextAnchor.MiddleCenter);
+            SetRect(lobbyPlayerCount.rectTransform, new Vector2(0.25f, 0.54f), new Vector2(0.75f, 0.64f), Vector2.zero, Vector2.zero);
+            var lobbyStartButton = CreateButton(lobby.transform, "시작", font, Primary, 28);
+            SetRect((RectTransform)lobbyStartButton.transform, new Vector2(0.39f, 0.41f), new Vector2(0.61f, 0.49f), Vector2.zero, Vector2.zero);
+            var lobbyLeaveButton = CreateButton(lobby.transform, "나가기", font, Danger, 22);
+            SetRect((RectTransform)lobbyLeaveButton.transform, new Vector2(0.025f, 0.90f), new Vector2(0.13f, 0.965f), Vector2.zero, Vector2.zero);
+
             var gameHud = CreateFullPanel(canvasObject.transform, "GameHudScreen", Color.clear, false);
             var roomText = CreateText(gameHud.transform, "Room", font, 27, FontStyle.Bold, TextAnchor.MiddleLeft);
             roomText.gameObject.AddComponent<Shadow>().effectColor = new Color(0f, 0f, 0f, 0.8f);
@@ -265,6 +273,12 @@ namespace Sprint0.Editor
             var leaveButton = CreateButton(settingsCard.transform, "방 나가기", font, Danger);
             SetRect((RectTransform)leaveButton.transform, new Vector2(0.14f, 0.23f), new Vector2(0.86f, 0.37f), Vector2.zero, Vector2.zero);
 
+            var serverClosed = CreateFullPanel(canvasObject.transform, "ServerClosedScreen", Background);
+            var serverClosedText = CreateText(serverClosed.transform, "서버가 종료되었습니다", font, 38, FontStyle.Bold, TextAnchor.MiddleCenter);
+            SetRect(serverClosedText.rectTransform, new Vector2(0.20f, 0.52f), new Vector2(0.80f, 0.64f), Vector2.zero, Vector2.zero);
+            var serverClosedConfirm = CreateButton(serverClosed.transform, "확인", font, Primary);
+            SetRect((RectTransform)serverClosedConfirm.transform, new Vector2(0.40f, 0.39f), new Vector2(0.60f, 0.47f), Vector2.zero, Vector2.zero);
+
             var statusBackground = CreateUiObject("Status", canvasObject.transform);
             var statusImage = statusBackground.AddComponent<Image>();
             statusImage.color = new Color(0.03f, 0.05f, 0.08f, 0.92f);
@@ -277,24 +291,32 @@ namespace Sprint0.Editor
             controller.Configure(
                 main,
                 browser,
+                lobby,
                 gameHud,
                 settings,
+                serverClosed,
                 createButton,
                 browseButton,
                 quitButton,
                 refreshButton,
                 backButton,
                 content,
+                lobbyPlayerCount,
+                lobbyStartButton,
+                lobbyLeaveButton,
                 roomText,
                 resumeButton,
                 leaveButton,
+                serverClosedConfirm,
                 statusText,
                 font,
                 BuildVersion);
 
             browser.SetActive(false);
+            lobby.SetActive(false);
             gameHud.SetActive(false);
             settings.SetActive(false);
+            serverClosed.SetActive(false);
             Selection.activeGameObject = systems;
         }
 
