@@ -1,0 +1,19 @@
+{
+  "name": "RaftSharkDive.PlayModeTests",
+  "rootNamespace": "RaftSharkDive.Tests",
+  "references": [
+    "RaftSharkDive.Runtime"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "noEngineReferences": false
+}
