@@ -57,6 +57,29 @@
 
 이 Windows 환경의 Burst 캐시 DLL 로드 제한 때문에 배치 실행에는 `--burst-disable-compilation`을 사용했다. Inspector의 게임 규칙이나 새 능력을 바꾸는 설정은 아니다. Editor에서 같은 DLL 오류가 발생하면 Jobs/Burst의 Enable Compilation을 끄고 테스트할 수 있다.
 
+### 2026-09-14: 일반 에디터 Relay 시작 실패 우회
+
+Editor.log의 최초 실패는 `UnityTLSCallbacks.GetSendCallbackPtr()`에서 발생한
+`Burst failed to compile the function pointer ... SendCallback`이었다.
+이후 `StartHost()`의 실패 정리 과정에서 `Trying to destroy object 0` 경고와
+세션 시작 실패 예외가 연쇄 발생했다.
+
+`Assets/_Project/Editor/WindowsEditorBurstWorkaround.cs`에서 Windows 에디터의
+`SubsystemRegistration` 시점에 Burst 컴파일을 비활성화한다. 씬의 Awake/Start와
+Relay 드라이버 생성 전에 적용되며 도메인 재로드를 끈 Play 진입에도 실행된다.
+이 환경에서는 에디터 Play의 Burst 성능 최적화를 포기하고 관리 코드로 실행한다.
+플레이어 빌드 및 다른 OS의 에디터에는 포함되지 않는다. 네이티브 DLL 로드 문제가
+해결되면 이 우회 파일을 제거하고 Burst를 다시 활성화할 수 있다.
+
+설정 API: [Unity Burst EnableBurstCompilation](https://docs.unity3d.com/Packages/com.unity.burst@1.8/api/Unity.Burst.BurstCompilerOptions.EnableBurstCompilation.html).
+
+검증: Unity 6000.3.10f1에서 컴파일 성공. Burst를 켠 뒤 빈 씬의 실제 Play 진입으로
+우회 설정의 자동 실행을 확인했고, 설치된 Transport 패키지의 TLS 송신·수신·로그
+콜백 포인터 생성 3건이 모두 통과했다. 기록은
+`Logs/burst-relay-playmode-validation.log`, 임시 검증 소스는
+`Logs/BurstRelayValidation.cs`에 보관했다. 실제 온라인 방 생성·2인 Relay 접속은
+이번 검증에서 수행하지 않았다.
+
 - `Logs/gravity-redesign-build.log`: 최종 컴파일·빌드 기록
 - `Logs/gravity-redesign-host.log`, `Logs/gravity-redesign-client.log`: 최종 5개 연속 플레이 기록
 - `Logs/gravity-redesign-preview.log`: 최종 씬 렌더 및 참조 검사
