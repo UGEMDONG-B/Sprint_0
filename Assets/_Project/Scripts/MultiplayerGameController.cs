@@ -56,6 +56,7 @@ namespace Sprint0.Multiplayer
         [SerializeField] bool reloadSceneAfterSession;
 
         ISession activeSession;
+        NetworkManager boundNetworkManager;
         bool isReady;
         bool isBusy;
         bool isSettingsOpen;
@@ -131,12 +132,13 @@ namespace Sprint0.Multiplayer
             EnsureLobbyScreen();
             ApplyRuntimeFont();
             BindButtons();
-            BindNetworkCallbacks();
             ShowMainScreen();
         }
 
         async void Start()
         {
+            // Scene Awake order is unspecified; NetworkManager.Singleton is ready by Start.
+            BindNetworkCallbacks();
             SetStatus("온라인 서비스에 연결 중...");
             SetMenuInteractable(false);
 
@@ -213,32 +215,43 @@ namespace Sprint0.Multiplayer
 
         void BindNetworkCallbacks()
         {
-            if (NetworkManager.Singleton == null)
+            var manager = NetworkManager.Singleton;
+            if (manager == null)
             {
                 return;
             }
 
-            NetworkManager.Singleton.OnClientStopped += OnNetworkStopped;
-            NetworkManager.Singleton.OnServerStopped += OnNetworkStopped;
-            if (NetworkManager.Singleton.NetworkConfig.ConnectionApproval)
-                NetworkManager.Singleton.ConnectionApprovalCallback = (request, response) =>
-                {
-                    response.Approved = NetworkManager.Singleton.ConnectedClientsIds.Count < maxPlayers;
-                    response.CreatePlayerObject = NetworkManager.Singleton.NetworkConfig.PlayerPrefab != null;
-                    response.Pending = false;
-                    response.Reason = response.Approved ? "" : "Room is full.";
-                };
+            if (boundNetworkManager != manager)
+            {
+                UnbindNetworkCallbacks();
+                boundNetworkManager = manager;
+                manager.OnClientStopped += OnNetworkStopped;
+                manager.OnServerStopped += OnNetworkStopped;
+            }
+            if (manager.NetworkConfig.ConnectionApproval)
+                manager.ConnectionApprovalCallback = ApproveConnection;
+        }
+
+        void ApproveConnection(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
+        {
+            response.Approved = boundNetworkManager != null && boundNetworkManager.ConnectedClientsIds.Count < maxPlayers;
+            response.CreatePlayerObject = response.Approved && boundNetworkManager.NetworkConfig.PlayerPrefab != null;
+            response.Pending = false;
+            response.Reason = response.Approved ? "" : "Room is full.";
         }
 
         void UnbindNetworkCallbacks()
         {
-            if (NetworkManager.Singleton == null)
+            if (boundNetworkManager == null)
             {
                 return;
             }
 
-            NetworkManager.Singleton.OnClientStopped -= OnNetworkStopped;
-            NetworkManager.Singleton.OnServerStopped -= OnNetworkStopped;
+            boundNetworkManager.OnClientStopped -= OnNetworkStopped;
+            boundNetworkManager.OnServerStopped -= OnNetworkStopped;
+            if (boundNetworkManager.ConnectionApprovalCallback == ApproveConnection)
+                boundNetworkManager.ConnectionApprovalCallback = null;
+            boundNetworkManager = null;
         }
 
         async void OnNetworkStopped(bool _)
@@ -726,7 +739,16 @@ namespace Sprint0.Multiplayer
 
         bool CanBeginOnlineAction()
         {
-            return isReady && !isBusy && activeSession == null;
+            if (!isReady || isBusy || activeSession != null) return false;
+
+            // Also cover a manager replaced or created after this controller's Start.
+            BindNetworkCallbacks();
+            if (boundNetworkManager == null)
+            {
+                SetStatus("NetworkManager가 없어 연결을 시작할 수 없습니다.");
+                return false;
+            }
+            return !boundNetworkManager.IsListening && !boundNetworkManager.ShutdownInProgress;
         }
 
         void SetBusy(bool busy, string message = null)
