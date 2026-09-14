@@ -33,6 +33,12 @@ namespace Sprint0.GravityCoop
             lastInput = Time.unscaledTime;
         }
 
+        public void FaceObject(Vector3 position, Vector3 up)
+        {
+            var direction = Vector3.ProjectOnPlane(position - Body.position, up);
+            if (direction.sqrMagnitude > 0.01f) Facing = direction.normalized;
+        }
+
         public void Restore(Vector3 position)
         {
             input = Vector2.zero;

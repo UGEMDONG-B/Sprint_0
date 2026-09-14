@@ -13,8 +13,15 @@ namespace Sprint0.GravityCoop
         [Min(0)] public float gravityCooldown = 0.5f;
         [Min(0)] public float respawnDelay = 0.8f;
         [Min(0.1f)] public float interactionDistance = 2.2f;
+        [Min(0)] public float carryClearance = 0.3f;
         [Min(0.1f)] public float cameraRotationSpeed = 5f;
         public float runnerCameraDistance = 7f;
+        [Header("Runner camera")]
+        [Min(0.01f)] public float mouseSensitivity = 0.12f;
+        public Vector2 pitchLimits = new(-65, 75);
+        public Vector2 zoomLimits = new(1.5f, 9f);
+        [Min(0.01f)] public float cameraCollisionRadius = 0.2f;
+        public float observerElevation = 3f;
         public GravityRunner runner;
         public GravityPuzzle[] puzzles;
         public NetworkVariable<GravityDirection> Direction = new(GravityDirection.Down);
@@ -28,7 +35,9 @@ namespace Sprint0.GravityCoop
         public NetworkVariable<double> SectionStarted = new();
         double respawnAt;
         float inputAt;
-        Vector3 cameraUp = Vector3.up;
+        Quaternion gravityCameraFrame = Quaternion.identity;
+        float cameraYaw;
+        float cameraPitch = 12;
         public Vector3 Down => DirectionVector(Direction.Value);
         public bool Playing => IsSpawned && Ready.Value && !Dead.Value && !Finished.Value;
         public bool IsOperator => IsSpawned && NetworkManager.LocalClientId == Unity.Netcode.NetworkManager.ServerClientId;
@@ -45,6 +54,7 @@ namespace Sprint0.GravityCoop
         void Awake() { Instance = this; }
         public override void OnDestroy()
         {
+            if (!IsOperator) ReleaseCursor();
             if (Instance == this) Instance = null;
             base.OnDestroy();
         }
@@ -56,7 +66,8 @@ namespace Sprint0.GravityCoop
             if (!IsSpawned) return;
             if (IsServer)
             {
-                bool pair = NetworkManager.ConnectedClientsIds.Count == 2;
+                var flow = Sprint0.Multiplayer.MultiplayerGameController.Instance;
+                bool pair = NetworkManager.ConnectedClientsIds.Count == 2 && (flow == null || flow.HasGameStarted);
                 if (pair != Ready.Value)
                 {
                     Ready.Value = pair;
@@ -67,6 +78,13 @@ namespace Sprint0.GravityCoop
             var keyboard = Keyboard.current;
             if (System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "-gravitySmoke") >= 0) return;
             if (keyboard == null) return;
+            var menu = Sprint0.Multiplayer.MultiplayerGameController.Instance;
+            if (menu != null && !menu.CanControlPlayer)
+            {
+                if (!IsOperator) { ReleaseCursor(); if (Playing) MoveRpc(Vector2.zero, false); }
+                return;
+            }
+            if (!IsOperator) UpdateCameraInput(keyboard);
             if (keyboard.rKey.wasPressedThisFrame) ResetRpc();
             if (!Playing) return;
             if (IsOperator)
@@ -81,13 +99,53 @@ namespace Sprint0.GravityCoop
                 Vector2 move = new((keyboard.dKey.isPressed ? 1 : 0) - (keyboard.aKey.isPressed ? 1 : 0),
                     (keyboard.wKey.isPressed ? 1 : 0) - (keyboard.sKey.isPressed ? 1 : 0));
                 bool jump = keyboard.spaceKey.wasPressedThisFrame;
+                if (Cursor.lockState != CursorLockMode.Locked) { move = Vector2.zero; jump = false; }
+                // Keep the server's validated two-axis input; only the local input basis changes.
+                move = CameraRelativeInput(move, cameraYaw);
                 if (Time.unscaledTime >= inputAt || jump)
                 {
                     MoveRpc(move, jump);
                     inputAt = Time.unscaledTime + 1f / 30;
                 }
-                if (keyboard.eKey.wasPressedThisFrame) InteractRpc();
+                if (Cursor.lockState == CursorLockMode.Locked && keyboard.eKey.wasPressedThisFrame) InteractRpc();
             }
+        }
+
+        public static Vector2 CameraRelativeInput(Vector2 input, float yaw)
+        {
+            float angle = yaw * Mathf.Deg2Rad;
+            return new Vector2(input.x * Mathf.Cos(angle) + input.y * Mathf.Sin(angle),
+                -input.x * Mathf.Sin(angle) + input.y * Mathf.Cos(angle));
+        }
+
+        static void ReleaseCursor()
+        {
+            Cursor.lockState = CursorLockMode.None;
+            Cursor.visible = true;
+        }
+
+        void OnApplicationFocus(bool focused) { if (!focused && !IsOperator) ReleaseCursor(); }
+
+        void UpdateCameraInput(Keyboard keyboard)
+        {
+            if (!Playing || keyboard.escapeKey.wasPressedThisFrame) { ReleaseCursor(); return; }
+            var mouse = Mouse.current;
+            if (mouse == null) return;
+            if (Cursor.lockState != CursorLockMode.Locked)
+            {
+                // Keep HUD buttons clickable. Click inside the world view to resume looking.
+                Vector2 point = mouse.position.ReadValue();
+                if (mouse.leftButton.wasPressedThisFrame && Camera.main != null && Camera.main.pixelRect.Contains(point))
+                {
+                    Cursor.lockState = CursorLockMode.Locked;
+                    Cursor.visible = false;
+                }
+                return;
+            }
+            var delta = mouse.delta.ReadValue();
+            cameraYaw = Mathf.Repeat(cameraYaw + delta.x * mouseSensitivity, 360);
+            cameraPitch = Mathf.Clamp(cameraPitch - delta.y * mouseSensitivity, pitchLimits.x, pitchLimits.y);
+            runnerCameraDistance = Mathf.Clamp(runnerCameraDistance - mouse.scroll.ReadValue().y * 0.01f, zoomLimits.x, zoomLimits.y);
         }
 
         bool IsRunner(ulong sender) => sender != Unity.Netcode.NetworkManager.ServerClientId && NetworkManager.ConnectedClients.ContainsKey(sender);
@@ -144,6 +202,7 @@ namespace Sprint0.GravityCoop
             {
                 HeldBox.Value = closest;
                 var box = Current.boxes[closest];
+                runner.FaceObject(box.Body.position, -Down);
                 box.Body.isKinematic = true;
                 Physics.IgnoreCollision(runner.GetComponent<Collider>(), box.GetComponent<Collider>(), true);
             }
@@ -168,14 +227,24 @@ namespace Sprint0.GravityCoop
                 if (Vector3.Distance(box.Body.position, Current.transform.position + Vector3.up * 8) > 26) { Die(); return; }
             if (HeldBox.Value < 0) return;
             var held = Current.boxes[HeldBox.Value];
-            var target = runner.Body.position + runner.Facing * 1.25f;
+            var target = runner.Body.position + runner.Facing * 1.25f - Down * carryClearance;
             // Sweep the entire path: a held box must never teleport through a wall or door.
             var delta = target - held.Body.position;
             foreach (var hit in Physics.BoxCastAll(held.Body.position, Vector3.one * 0.48f, delta.normalized,
                 held.Body.rotation, delta.magnitude, ~0, QueryTriggerInteraction.Ignore))
-                if (hit.rigidbody != held.Body && hit.rigidbody != runner.Body) { Drop(); return; }
+                if (hit.rigidbody != held.Body && hit.rigidbody != runner.Body)
+                {
+                    if (System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "-gravitySmoke") >= 0)
+                        Debug.Log($"[GravityTest] Carry sweep blocked by {hit.collider.name} at {held.Body.position} -> {target}");
+                    Drop(); return;
+                }
             foreach (var col in Physics.OverlapBox(target, Vector3.one * 0.48f, held.Body.rotation, ~0, QueryTriggerInteraction.Ignore))
-                if (col.attachedRigidbody != held.Body && col.attachedRigidbody != runner.Body) { Drop(); return; }
+                if (col.attachedRigidbody != held.Body && col.attachedRigidbody != runner.Body)
+                {
+                    if (System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "-gravitySmoke") >= 0)
+                        Debug.Log($"[GravityTest] Carry destination blocked by {col.name}");
+                    Drop(); return;
+                }
             held.Body.MovePosition(target);
         }
 
@@ -215,23 +284,33 @@ namespace Sprint0.GravityCoop
         {
             if (!IsSpawned || Camera.main == null) return;
             var camera = Camera.main;
-            camera.rect = new Rect(0, 0, 1, 0.70f);
+            camera.rect = new Rect(0, 0, 1, 1);
             if (IsOperator)
             {
                 camera.orthographic = true;
                 camera.orthographicSize = Mathf.Max(10.5f, 14f / camera.aspect);
-                camera.transform.SetPositionAndRotation(Current.transform.position + new Vector3(0, 8, -35), Quaternion.identity);
+                camera.transform.SetPositionAndRotation(Current.transform.position + new Vector3(0, 8 + observerElevation, -35),
+                    Quaternion.LookRotation(new Vector3(0, -observerElevation, 35), Vector3.up));
             }
             else
             {
                 camera.orthographic = false;
+                camera.nearClipPlane = 0.05f;
                 // Quaternion interpolation also handles the 180-degree up/down transition.
                 var desired = Quaternion.LookRotation(Vector3.forward, -Down);
-                camera.transform.rotation = Quaternion.Slerp(camera.transform.rotation, desired, 1 - Mathf.Exp(-cameraRotationSpeed * Time.deltaTime));
-                cameraUp = camera.transform.up;
-                camera.transform.position = runner.transform.position - Vector3.forward * runnerCameraDistance + cameraUp * 1.2f;
+                gravityCameraFrame = Quaternion.Slerp(gravityCameraFrame, desired, 1 - Mathf.Exp(-cameraRotationSpeed * Time.deltaTime));
+                var rotation = gravityCameraFrame * Quaternion.Euler(cameraPitch, cameraYaw, 0);
+                // Start inside the runner hull so a gravity turn cannot put the cast origin through a wall.
+                var pivot = runner.transform.position;
+                var backward = rotation * Vector3.back;
+                float distance = Mathf.Clamp(runnerCameraDistance, zoomLimits.x, zoomLimits.y);
+                foreach (var hit in Physics.SphereCastAll(pivot, cameraCollisionRadius, backward, distance, ~0, QueryTriggerInteraction.Ignore))
+                {
+                    if (hit.rigidbody == runner.Body || hit.collider.name == "Invisible front boundary") continue;
+                    distance = Mathf.Min(distance, Mathf.Max(0, hit.distance - 0.05f));
+                }
+                camera.transform.SetPositionAndRotation(pivot + backward * distance, rotation);
             }
         }
     }
 }
-

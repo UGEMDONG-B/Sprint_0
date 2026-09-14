@@ -49,6 +49,11 @@ namespace Sprint0.Multiplayer
         [SerializeField] Font fallbackFont;
         [SerializeField] int maxPlayers = 4;
         [SerializeField] int sceneBuildVersion = 1;
+        [Header("Game integration")]
+        [SerializeField] int minimumPlayersToStart = 1;
+        [SerializeField] string sessionType = "Sprint0.GameSession";
+        [SerializeField] bool lockCursorForGameplay = true;
+        [SerializeField] bool reloadSceneAfterSession;
 
         ISession activeSession;
         bool isReady;
@@ -57,9 +62,13 @@ namespace Sprint0.Multiplayer
         bool isGameStarted;
         bool isRefreshingRooms;
         float nextRoomRefreshTime;
+        Font runtimeFont;
 
         public bool CanControlPlayer => activeSession != null && isGameStarted && !isSettingsOpen && !isBusy;
         public int SceneBuildVersion => sceneBuildVersion;
+        public bool HasGameStarted => isGameStarted;
+        public GameObject GameHudScreen => gameHudScreen;
+        public void OpenSettings() => SetSettingsOpen(true);
 
         public void Configure(
             GameObject main,
@@ -111,6 +120,7 @@ namespace Sprint0.Multiplayer
 
         void Awake()
         {
+            Application.runInBackground = true;
             if (Instance != null && Instance != this)
             {
                 Destroy(gameObject);
@@ -181,12 +191,17 @@ namespace Sprint0.Multiplayer
                 if (lobbyPlayerCountText != null)
                 {
                     lobbyPlayerCountText.text = $"현재 플레이어  {activeSession.Players.Count} / {activeSession.MaxPlayers}";
+                    if (minimumPlayersToStart > 1)
+                        lobbyPlayerCountText.text += activeSession.Players.Count < minimumPlayersToStart ? "\n플레이어를 기다리는 중" : "\n호스트가 시작하면 게임에 입장합니다";
                 }
+                lobbyStartButton.interactable = !isBusy && activeSession.IsHost && activeSession.Players.Count >= minimumPlayersToStart
+                    && NetworkManager.Singleton != null && NetworkManager.Singleton.ConnectedClientsIds.Count >= minimumPlayersToStart;
             }
         }
 
         void OnDestroy()
         {
+            if (runtimeFont != null) Destroy(runtimeFont);
             UnbindSessionCallbacks(activeSession);
             UnbindNetworkCallbacks();
 
@@ -205,6 +220,14 @@ namespace Sprint0.Multiplayer
 
             NetworkManager.Singleton.OnClientStopped += OnNetworkStopped;
             NetworkManager.Singleton.OnServerStopped += OnNetworkStopped;
+            if (NetworkManager.Singleton.NetworkConfig.ConnectionApproval)
+                NetworkManager.Singleton.ConnectionApprovalCallback = (request, response) =>
+                {
+                    response.Approved = NetworkManager.Singleton.ConnectedClientsIds.Count < maxPlayers;
+                    response.CreatePlayerObject = NetworkManager.Singleton.NetworkConfig.PlayerPrefab != null;
+                    response.Pending = false;
+                    response.Reason = response.Approved ? "" : "Room is full.";
+                };
         }
 
         void UnbindNetworkCallbacks()
@@ -271,10 +294,11 @@ namespace Sprint0.Multiplayer
                     MaxPlayers = maxPlayers,
                     IsPrivate = false,
                     IsLocked = false,
-                    Type = "Sprint0.GameSession",
+                    Type = sessionType,
                     SessionProperties = new System.Collections.Generic.Dictionary<string, SessionProperty>
                     {
-                        [GameStartedProperty] = new SessionProperty("false")
+                        [GameStartedProperty] = new SessionProperty("false"),
+                        ["gameType"] = new SessionProperty(sessionType)
                     }
                 }.WithRelayNetwork();
 
@@ -329,19 +353,23 @@ namespace Sprint0.Multiplayer
 
                 ClearRoomList();
 
-                if (result.Sessions.Count == 0)
+                var compatible = new System.Collections.Generic.List<ISessionInfo>();
+                foreach (var candidate in result.Sessions)
+                    if (candidate.Properties != null && candidate.Properties.TryGetValue("gameType", out var type)
+                        ? type.Value == sessionType : sessionType == "Sprint0.GameSession") compatible.Add(candidate);
+                if (compatible.Count == 0)
                 {
                     CreateMessageRow("현재 참가 가능한 공개 방이 없습니다.");
                     SetStatus("방 목록은 5초마다 자동 갱신됩니다.");
                     return;
                 }
 
-                foreach (var session in result.Sessions)
+                foreach (var session in compatible)
                 {
                     CreateRoomRow(session);
                 }
 
-                SetStatus($"공개 방 {result.Sessions.Count}개");
+                SetStatus($"공개 방 {compatible.Count}개");
             }
             catch (Exception exception)
             {
@@ -446,8 +474,24 @@ namespace Sprint0.Multiplayer
             finally
             {
                 SetBusy(false);
-                ShowMainScreen();
+                if (reloadSceneAfterSession) StartCoroutine(ReloadSessionScene());
+                else ShowMainScreen();
             }
+        }
+
+        System.Collections.IEnumerator ReloadSessionScene()
+        {
+            isBusy = true;
+            SetCursorForGameplay(false);
+            var manager = NetworkManager.Singleton;
+            if (manager != null)
+            {
+                manager.Shutdown();
+                while (manager != null && manager.ShutdownInProgress) yield return null;
+                if (manager != null) Destroy(manager.gameObject);
+                yield return null;
+            }
+            UnityEngine.SceneManagement.SceneManager.LoadScene(gameObject.scene.path);
         }
 
         void EnterGameScreen()
@@ -520,6 +564,7 @@ namespace Sprint0.Multiplayer
 
         void AcknowledgeServerClosed()
         {
+            if (reloadSceneAfterSession) { StartCoroutine(ReloadSessionScene()); return; }
             serverClosedScreen.SetActive(false);
             ShowMainScreen();
         }
@@ -539,7 +584,7 @@ namespace Sprint0.Multiplayer
 
             var isHost = activeSession != null && activeSession.IsHost;
             lobbyStartButton.gameObject.SetActive(isHost);
-            lobbyStartButton.interactable = isHost;
+            lobbyStartButton.interactable = isHost && activeSession.Players.Count >= minimumPlayersToStart;
 
             if (IsSessionGameStarted())
             {
@@ -549,7 +594,8 @@ namespace Sprint0.Multiplayer
 
         async void StartGameFromLobby()
         {
-            if (isBusy || activeSession == null || !activeSession.IsHost || activeSession is not IHostSession hostSession)
+            if (isBusy || activeSession == null || !activeSession.IsHost || activeSession.Players.Count < minimumPlayersToStart
+                || NetworkManager.Singleton.ConnectedClientsIds.Count < minimumPlayersToStart || activeSession is not IHostSession hostSession)
             {
                 return;
             }
@@ -702,7 +748,7 @@ namespace Sprint0.Multiplayer
             openRoomBrowserButton.interactable = interactable;
             refreshRoomsButton.interactable = interactable;
             roomBrowserBackButton.interactable = interactable;
-            lobbyStartButton.interactable = interactable && activeSession != null && activeSession.IsHost;
+            lobbyStartButton.interactable = interactable && activeSession != null && activeSession.IsHost && activeSession.Players.Count >= minimumPlayersToStart;
             lobbyLeaveButton.interactable = interactable && activeSession != null;
         }
 
@@ -789,7 +835,7 @@ namespace Sprint0.Multiplayer
         {
             try
             {
-                var runtimeFont = Font.CreateDynamicFontFromOSFont(
+                runtimeFont = Font.CreateDynamicFontFromOSFont(
                     new[] { "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Arial" }, 24);
 
                 if (runtimeFont != null)
@@ -802,14 +848,14 @@ namespace Sprint0.Multiplayer
                 // The serialized legacy font remains available on platforms without OS font access.
             }
 
-            foreach (var text in GetComponentsInChildren<Text>(true))
-            {
-                text.font = fallbackFont;
-            }
+            foreach (var screen in new[] { mainScreen, roomBrowserScreen, lobbyScreen, gameHudScreen, settingsScreen, serverClosedScreen })
+                foreach (var text in screen.GetComponentsInChildren<Text>(true)) text.font = fallbackFont;
+            if (statusText != null) statusText.font = fallbackFont;
         }
 
-        static void SetCursorForGameplay(bool gameplay)
+        void SetCursorForGameplay(bool gameplay)
         {
+            gameplay = gameplay && isGameStarted && lockCursorForGameplay;
             Cursor.lockState = gameplay ? CursorLockMode.Locked : CursorLockMode.None;
             Cursor.visible = !gameplay;
         }

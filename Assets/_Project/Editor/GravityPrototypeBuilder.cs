@@ -30,7 +30,7 @@ namespace Sprint0.Editor
             manager.NetworkConfig.ConnectionApproval = true;
             manager.NetworkConfig.TickRate = 30;
             manager.NetworkConfig.PlayerPrefab = null;
-            new GameObject("Connection HUD").AddComponent<GravityConnection>().manager = manager;
+            ImportSharedInterface(scene, manager);
 
             var gameObject = new GameObject("Gravity Game — tune gameplay here");
             gameObject.AddComponent<NetworkObject>();
@@ -92,6 +92,8 @@ namespace Sprint0.Editor
                 {
                     if (component == null) throw new System.Exception("Missing script in prototype scene");
                     components++;
+                    if (component is TextMesh text && text.font == null)
+                        throw new System.Exception("Missing label font: " + component.name);
                     var serialized = new SerializedObject(component);
                     var property = serialized.GetIterator();
                     while (property.NextVisible(true))
@@ -104,6 +106,29 @@ namespace Sprint0.Editor
                 if (puzzle.spawn == null || puzzle.exit == null || puzzle.boxes.Any(b => b == null)
                     || puzzle.plates.Any(p => p == null) || puzzle.hazards.Any(h => h == null)) throw new System.Exception("Invalid puzzle references");
             Debug.Log($"[Gravity] Validated {components} components; no missing scripts/references; five configured puzzles.");
+        }
+
+        static void ImportSharedInterface(Scene destination, NetworkManager manager)
+        {
+            // Move the loaded UI roots together so all serialized cross-root button references survive.
+            // SampleScene remains the source of truth; never save the additive source scene.
+            var source = EditorSceneManager.OpenScene("Assets/Scenes/SampleScene.unity", OpenSceneMode.Additive);
+            var controller = source.GetRootGameObjects().SelectMany(r => r.GetComponentsInChildren<Sprint0.Multiplayer.MultiplayerGameController>(true)).Single();
+            var canvas = source.GetRootGameObjects().SelectMany(r => r.GetComponentsInChildren<Canvas>(true)).Single();
+            var events = source.GetRootGameObjects().SelectMany(r => r.GetComponentsInChildren<UnityEngine.EventSystems.EventSystem>(true)).Single();
+            foreach (var root in new[] { controller.transform.root.gameObject, canvas.transform.root.gameObject, events.transform.root.gameObject }.Distinct())
+                SceneManager.MoveGameObjectToScene(root, destination);
+            EditorSceneManager.CloseScene(source, true);
+            SceneManager.SetActiveScene(destination);
+            var serialized = new SerializedObject(controller);
+            serialized.FindProperty("maxPlayers").intValue = 2;
+            serialized.FindProperty("minimumPlayersToStart").intValue = 2;
+            serialized.FindProperty("sessionType").stringValue = "Sprint0.GravityCoop";
+            serialized.FindProperty("lockCursorForGameplay").boolValue = false;
+            serialized.FindProperty("reloadSceneAfterSession").boolValue = true;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            // Replace only the sample's gameplay presentation; preserve all shared menu screens.
+            foreach (Transform child in controller.GameHudScreen.transform) child.gameObject.SetActive(false);
         }
 
         static GravityPuzzle Room(int index)
@@ -165,12 +190,14 @@ namespace Sprint0.Editor
                     Block(parent, "Branch outer wall", new Vector3(0, 13, 0), new Vector3(0.4f, 6, 6), wall);
                 puzzle.routeA = Block(parent, "Route A — inlet", new Vector3(intake, 10, 0), new Vector3(2.4f, 0.4f, 6), new Color(0.15f, 0.65f, 0.95f)).GetComponent<BoxCollider>();
                 puzzle.routeB = Block(parent, "Route B — delivery", new Vector3(divider, 13, 0), new Vector3(0.4f, 6, 6), new Color(0.8f, 0.4f, 0.95f)).GetComponent<BoxCollider>();
-                puzzle.lever = Volume(parent, "Route selector", new Vector3(divider - 1.5f, 9.1f, -1.5f), new Vector3(0.5f, 0.7f, 0.5f), Color.magenta).transform;
+                puzzle.routeA.enabled = false;
+                puzzle.routeA.GetComponent<Renderer>().enabled = false;
+                puzzle.lever = Volume(parent, "Route selector", new Vector3(intake - 2.2f, 9.1f, -1.5f), new Vector3(0.5f, 0.7f, 0.5f), Color.magenta).transform;
                 Label(parent, "A / IN", new Vector3(intake, 10.8f, -2.95f));
                 Label(parent, "B / OUT", new Vector3(divider + 0.8f, 12.8f, -2.95f));
-                Label(parent, "E / A-B", new Vector3(divider - 1.5f, 8.5f, -2.5f));
+                Label(parent, "E / A-B", new Vector3(intake - 2.2f, 8.5f, -2.5f));
                 var delivery = Volume(parent, "Q delivery plate", new Vector3(11.65f, 15, 0), new Vector3(0.7f, 2, 5.8f), Color.yellow);
-                Label(parent, "Q", new Vector3(10.8f, 14.5f, -2.8f));
+                Label(parent, "Q / WEIGHT", new Vector3(10.8f, 14.5f, -2.8f));
                 if (index == 2)
                 {
                     puzzle.boxes = new[] { Box(parent, index, new Vector3(-7, 0.6f, 0)) };
@@ -205,15 +232,52 @@ namespace Sprint0.Editor
             puzzle.exit = Volume(parent, "Exit", exitPosition, exitSize, new Color(0.1f, 0.7f, 0.55f));
             Label(parent, "EXIT", exitPosition + new Vector3(-1.3f, 0, -1.8f));
             if (puzzle.plates.Length > 0)
-                puzzle.door = Block(parent, "Conditional exit gate", exitPosition, exitSize, new Color(0.25f, 0.4f, 0.8f)).GetComponent<Collider>();
+                puzzle.door = Block(parent, "Conditional exit gate", exitPosition, exitSize + Vector3.one * 0.12f, new Color(0.25f, 0.4f, 0.8f)).GetComponent<Collider>();
+            foreach (var crate in puzzle.boxes)
+            {
+                Hint(crate.GetComponent<Collider>(), "운반 상자", "중력을 따라 떨어집니다. 내부 플레이어가 가까이에서 E로 집거나 내려놓을 수 있습니다.");
+                Label(crate.transform, "E / CARRY", new Vector3(0, 0.8f, -0.6f));
+            }
+            foreach (var surface in parent.GetComponentsInChildren<BoxCollider>())
+                if (!surface.isTrigger && surface.name != "Invisible front boundary" && surface.GetComponent<GravityHint>() == null && surface != puzzle.door && surface != puzzle.routeA && surface != puzzle.routeB)
+                    Hint(surface, "고정 벽 / 발판", "중력 방향에 따라 벽도 바닥이 됩니다. 앞뒤로 비어 있는 공간과 착지할 면을 살펴보세요.");
+            string plateNames = "";
+            for (int i = 0; i < puzzle.plates.Length; i++)
+            {
+                var plate = puzzle.plates[i];
+                string id = plate.name.StartsWith("P") ? "P" : "Q";
+                Hint(plate, id + " 압력판", "사람이나 내려놓은 상자가 닿아 있는 동안 작동합니다. 떨어지면 꺼지고 출구가 닫힙니다.").plateIndex = i;
+                plateNames += (i == 0 ? "" : " + ") + id;
+            }
+            Hint(puzzle.exit, "출구" + (plateNames.Length > 0 ? " · " + plateNames : ""),
+                plateNames.Length > 0 ? "같은 이름의 압력판과 연결되어 있습니다. 문이 열린 동안 내부 플레이어가 들어가면 완료됩니다." : "내부 플레이어가 이 영역에 들어가면 완료됩니다.");
+            if (plateNames.Length > 0) Label(parent, plateNames + " / HOLD", exitPosition + new Vector3(-2, -0.7f, -1.8f));
+            if (puzzle.lever != null)
+            {
+                Hint(puzzle.lever.GetComponent<Collider>(), "A/B 전환 레버", "내부 플레이어가 가까이에서 E를 누르면 한 통로가 열리고 다른 통로가 닫힙니다.");
+                Hint(puzzle.routeA, "A 통로 · 하늘색", "레버로 여닫습니다. 문이 사라지면 통과할 수 있습니다. 문 안에 사람이나 상자가 있으면 닫히지 않습니다.");
+                Hint(puzzle.routeB, "B 통로 · 보라색", "A와 반대로 열리고 닫힙니다. 레버를 조작하는 사람과 통과 시점을 맞춰보세요.");
+            }
+            foreach (var hazard in puzzle.hazards)
+                Hint(hazard, "위험 구역 · 빨강", "닿으면 현재 퍼즐이 처음 상태로 돌아갑니다.");
             return puzzle;
+        }
+
+        static GravityHint Hint(Collider target, string heading, string explanation)
+        {
+            var hint = target.gameObject.AddComponent<GravityHint>();
+            hint.target = target;
+            hint.heading = heading;
+            hint.explanation = explanation;
+            return hint;
         }
 
         static BoxCollider ParkingHome(Transform parent, float x, string label, Color wall)
         {
-            Block(parent, label + " retaining lip", new Vector3(x + 0.9f, 14.75f, -1), new Vector3(0.5f, 2.5f, 3), wall);
+            var lip = Block(parent, label + " retaining lip", new Vector3(x + 0.9f, 14.75f, -1), new Vector3(0.5f, 2.5f, 3), wall);
+            Hint(lip.GetComponent<Collider>(), "고정 받침 턱", "중력이 바뀌어도 움직이지 않습니다. 상자가 미끄러지는 것을 받쳐줄 수 있습니다.");
             var plate = Volume(parent, label + " home plate", new Vector3(x, 15.65f, -1), new Vector3(1.9f, 0.7f, 3), Color.yellow);
-            Label(parent, label, new Vector3(x, 14.6f, -2.7f));
+            Label(parent, label + " / WEIGHT", new Vector3(x, 14.6f, -2.7f));
             return plate;
         }
 
@@ -223,9 +287,11 @@ namespace Sprint0.Editor
             obj.transform.SetParent(parent, false);
             obj.transform.localPosition = position;
             var label = obj.AddComponent<TextMesh>();
+            label.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            obj.GetComponent<MeshRenderer>().sharedMaterial = label.font.material;
             label.text = text;
             label.fontSize = 36;
-            label.characterSize = 0.075f;
+            label.characterSize = 0.1f;
             label.anchor = TextAnchor.MiddleCenter;
             label.color = Color.white;
         }
@@ -302,12 +368,49 @@ namespace Sprint0.Editor
             var camera = Camera.main;
             camera.orthographic = true;
             camera.orthographicSize = 10.5f;
-            camera.transform.position = game.puzzles[4].transform.position + new Vector3(0, 8, -35);
-            camera.transform.rotation = Quaternion.identity;
-            Capture(camera, "Logs/gravity-overview-preview.png");
+            for (int i = 0; i < game.puzzles.Length; i++)
+            {
+                camera.transform.position = game.puzzles[i].transform.position + new Vector3(0, 8 + game.observerElevation, -35);
+                camera.transform.rotation = Quaternion.LookRotation(new Vector3(0, -game.observerElevation, 35), Vector3.up);
+                Capture(camera, $"Logs/gravity-redesign-puzzle-{i + 1}.png");
+            }
             camera.orthographic = false;
             camera.transform.position = game.runner.transform.position + new Vector3(0, 1.2f, -7);
+            camera.transform.rotation = Quaternion.identity;
             Capture(camera, "Logs/gravity-runner-preview.png");
+        }
+
+        public static void CaptureSharedInterface()
+        {
+            var scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+            var controller = Object.FindFirstObjectByType<Sprint0.Multiplayer.MultiplayerGameController>();
+            var data = new SerializedObject(controller);
+            var screens = new[] { "mainScreen", "roomBrowserScreen", "lobbyScreen", "gameHudScreen", "settingsScreen", "serverClosedScreen" };
+            var font = Font.CreateDynamicFontFromOSFont(new[] { "Malgun Gothic", "Arial" }, 24);
+            var canvas = Object.FindFirstObjectByType<Canvas>();
+            foreach (var text in canvas.GetComponentsInChildren<UnityEngine.UI.Text>(true)) text.font = font;
+            var camera = Camera.main;
+            camera.rect = new Rect(0, 0, 1, 1);
+            canvas.renderMode = RenderMode.ScreenSpaceCamera;
+            canvas.worldCamera = camera;
+            canvas.planeDistance = 1;
+
+            ((UnityEngine.UI.Text)data.FindProperty("statusText").objectReferenceValue).transform.parent.gameObject.SetActive(false);
+            foreach (var selected in new[] { "mainScreen", "roomBrowserScreen", "lobbyScreen", "settingsScreen" })
+            {
+                foreach (var name in screens) ((GameObject)data.FindProperty(name).objectReferenceValue).SetActive(name == selected);
+                ((UnityEngine.UI.Text)data.FindProperty("lobbyPlayerCountText").objectReferenceValue).text = "현재 플레이어  1 / 2\n플레이어를 기다리는 중";
+                Canvas.ForceUpdateCanvases();
+                Capture(camera, "Logs/gravity-shared-" + selected + ".png");
+            }
+            Validate(scene, Object.FindFirstObjectByType<GravityGame>());
+            Object.DestroyImmediate(font);
+        }
+
+        public static void BuildSharedInterfaceValidation()
+        {
+            BuildPlayer();
+            CaptureSharedInterface();
         }
 
         static void Capture(Camera camera, string path)
