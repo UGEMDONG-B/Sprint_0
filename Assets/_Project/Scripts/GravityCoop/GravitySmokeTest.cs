@@ -34,6 +34,9 @@ namespace Sprint0.GravityCoop
             Application.runInBackground = true;
             Application.targetFrameRate = 60;
             manager = NetworkManager.Singleton;
+            // The disabled online controller normally registers the approval callback.
+            // Loopback tests connect directly; production lobby approval is unchanged.
+            manager.NetworkConfig.ConnectionApproval = false;
             manager.GetComponent<Unity.Netcode.Transports.UTP.UnityTransport>().SetConnectionData("127.0.0.1", 7777, "0.0.0.0");
             if (Array.IndexOf(Environment.GetCommandLineArgs(), "-gravityHost") >= 0) manager.StartHost();
             else manager.StartClient();
@@ -62,10 +65,10 @@ namespace Sprint0.GravityCoop
                 game.ChangeGravityRpc(GravityDirection.Right); // Must be rejected by the server's role check.
                 yield return new WaitForSeconds(1);
                 Capture("runner");
-                float deadline = Time.realtimeSinceStartup + 360;
+                float deadline = Time.realtimeSinceStartup + 540;
                 while (game != null && !game.Finished.Value && manager.IsConnectedClient && Time.realtimeSinceStartup < deadline) yield return null;
                 if (game == null || !game.Finished.Value) { Fail("Client disconnected or timed out before completion"); yield break; }
-                Check(game.Puzzle.Value == 4 && game.Current.DoorOpen.Value, "CLIENT final state synchronized");
+                Check(game.Puzzle.Value == game.puzzles.Length - 1 && game.Current.DoorOpen.Value, "CLIENT final state synchronized");
                 Debug.Log("[GravityTest] CLIENT PASS");
                 yield return new WaitForSeconds(4);
                 Application.Quit(failed ? 1 : 0);
@@ -76,6 +79,12 @@ namespace Sprint0.GravityCoop
             Check(game.Direction.Value == GravityDirection.Down, "Runner cannot change gravity");
             foreach (var root in game.gameObject.scene.GetRootGameObjects())
                 foreach (var component in root.GetComponentsInChildren<Component>(true)) Check(component != null, "No missing component");
+            if (Array.IndexOf(Environment.GetCommandLineArgs(), "-gravityCoopLabs") >= 0)
+            {
+                game.Puzzle.Value = 5;
+                game.ResetSection();
+                goto CoopLabs;
+            }
             if (Array.IndexOf(Environment.GetCommandLineArgs(), "-gravityFinal") >= 0)
             {
                 game.Puzzle.Value = 4;
@@ -276,7 +285,97 @@ namespace Sprint0.GravityCoop
             Check(game.Current.Pressed.Value == 3, "P survives while Q arrives");
             yield return MoveY(5.8f);
             yield return EnterExit(4);
-            Check(game.Finished.Value, "Puzzle 5 completed");
+            Check(game.Puzzle.Value == 5 && !game.Finished.Value, "Puzzle 5 advances to cooperation labs");
+            if (failed) yield break;
+
+            CoopLabs:
+            // P6: load, join the crate through the inlet, then return to the ceiling selector.
+            yield return Wait(0.5f);
+            Input(Vector2.zero, false, true);
+            yield return Wait(0.25f);
+            yield return MoveX(-5.25f);
+            Input(Vector2.zero, false, true);
+            yield return Wait(0.4f);
+            game.ChangeGravityRpc(GravityDirection.Up);
+            yield return Wait(2);
+            Check(game.Current.boxes[0].Body.position.y > 14 && !game.Current.DoorOpen.Value, "P6 delivery waits for runner");
+            yield return MoveX(-4);
+            yield return Wait(1.5f);
+            yield return MoveX(-8);
+            Input(Vector2.zero, false, true);
+            yield return Wait(0.3f);
+            Check(game.Current.LeverOn.Value, "P6 runner reaches ceiling selector through inlet");
+            yield return MoveZ(1.8f);
+            game.ChangeGravityRpc(GravityDirection.Right);
+            yield return Wait(2);
+            Check(game.Current.Pressed.Value == 1, "P6 operator delivers after handoff");
+            yield return MoveY(7);
+            yield return EnterExit(5);
+            Check(game.Puzzle.Value == 6, "Puzzle 6 completed");
+            if (failed) yield break;
+
+            // P7: prepare both launch lines, park together, then bypass the front retaining walls.
+            yield return Wait(0.5f);
+            yield return MoveX(-10.2f);
+            Input(Vector2.zero, false, true);
+            yield return Wait(0.3f);
+            yield return MoveX(-7.25f);
+            Input(Vector2.zero, false, true);
+            yield return Wait(0.4f);
+            yield return MoveZ(1.8f);
+            yield return MoveX(-2);
+            yield return MoveZ(-1.5f);
+            Input(Vector2.zero, false, true);
+            yield return Wait(0.3f);
+            Check(game.HeldBox.Value == 1, "P7 runner prepares second crate");
+            yield return MoveX(2.75f);
+            Input(Vector2.zero, false, true);
+            yield return Wait(0.4f);
+            Check(!game.Current.DoorOpen.Value, "P7 unprepared plates keep exit closed");
+            game.ChangeGravityRpc(GravityDirection.Up);
+            yield return Wait(2);
+            Check(game.Current.Pressed.Value == 3, "P7 both crates parked");
+            yield return MoveZ(1.8f);
+            game.ChangeGravityRpc(GravityDirection.Right);
+            yield return Wait(2);
+            Check(game.Current.Pressed.Value == 3, "P7 both plates survive exit transfer");
+            yield return MoveY(8);
+            yield return EnterExit(6);
+            Check(game.Puzzle.Value == 7, "Puzzle 7 completed");
+            if (failed) yield break;
+
+            // P8: preserve P, cross A to reach the rear ceiling switch, then take the return lane.
+            yield return Wait(0.5f);
+            yield return MoveX(-10.2f);
+            Input(Vector2.zero, false, true);
+            yield return Wait(0.3f);
+            yield return MoveX(-9.45f);
+            Input(Vector2.zero, false, true);
+            yield return Wait(0.4f);
+            yield return MoveZ(1.8f);
+            yield return MoveX(-2);
+            yield return MoveZ(-1.5f);
+            Input(Vector2.zero, false, true);
+            yield return Wait(0.3f);
+            yield return MoveX(0.75f);
+            Input(Vector2.zero, false, true);
+            yield return Wait(0.4f);
+            game.ChangeGravityRpc(GravityDirection.Up);
+            yield return Wait(2);
+            Check(game.Current.Pressed.Value == 1 && !game.Current.DoorOpen.Value, "P8 parking alone cannot open exit");
+            yield return MoveZ(1.8f);
+            yield return MoveX(4.5f);
+            yield return Wait(1.5f);
+            Input(Vector2.zero, false, true);
+            yield return Wait(0.3f);
+            Check(game.Current.LeverOn.Value, "P8 rear selector reached while P stays parked");
+            yield return MoveX(8);
+            game.ChangeGravityRpc(GravityDirection.Right);
+            yield return Wait(2);
+            Check(game.Current.Pressed.Value == 3, "P8 both switches open exit");
+            yield return MoveY(5.8f);
+            yield return EnterExit(7);
+            Check(game.Finished.Value, "Puzzle 8 completed");
             Debug.Log($"[GravityTest] HOST {(failed ? "FAIL" : "PASS")} {checks} checks");
             yield return new WaitForSeconds(2);
             Application.Quit(failed ? 1 : 0);

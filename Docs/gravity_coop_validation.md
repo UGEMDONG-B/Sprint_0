@@ -119,3 +119,15 @@ Relay 드라이버 생성 전에 적용되며 도메인 재로드를 끈 Play �
 ## 상하단 HUD 제거 (2026-09-13)
 
 양쪽 역할의 GravityHud를 제거하고 카메라 viewport를 전체 화면으로 변경했다. gravity-clean-screen-build.log: 빌드 성공, 종료 코드 0, 613개 컴포넌트 Missing Script/Reference 없음. 표시 변경이므로 전체 퍼즐 자동 테스트는 재실행하지 않았다.
+
+## 협동 실험 스테이지 6~8 추가 (2026-09-16)
+
+- 기존 1~5번 뒤에 받고 다시 보내기, 둘 다 준비됐어?, 보관하고 길 열기를 연결했다. 기존 상자·압력판·A/B 스위치와 문·고정 벽만 조합했으며 신규 런타임 퍼즐 규칙은 추가하지 않았다.
+- 6번은 천장 스위치까지 이동한 후 배송을 요청한다. 7번은 두 상자의 발사 위치와 플레이어의 뒤쪽 경로를 준비한다. 8번은 P 보관을 유지하면서 천장 스위치로 B를 열고 Q를 배송한다. 6/8번 선반 뒤에는 귀환 통로가 있어 A가 닫혀도 출구로 내려갈 수 있다.
+- `Logs/gravity-coop-labs-build.log`: Unity 6000.3.10f1 Windows 개발 빌드 성공, 종료 코드 0. 8개 방의 컴포넌트 971개에서 누락된 스크립트/참조 없음.
+- `Logs/gravity-eight-host.log`: HOST PASS 1047 checks. 네 방향 이동·착지·점프, 역할 권한, 리셋, 통로 끼임 방지, 기존 1~5번과 신규 6~8번 전체 연속 클리어 통과. 신규 방 풀이 중 위치 강제 변경 없이 클라이언트 이동/상호작용 RPC와 호스트 중력 입력을 사용했다.
+- `Logs/gravity-eight-client.log`: CLIENT PASS. 마지막 8번의 출구 개방과 전체 완료 상태 동기화 확인.
+- `Logs/gravity-coop-labs-preview.log`: 최종 저장 씬 렌더 성공. `Logs/gravity-redesign-puzzle-6.png`~`gravity-redesign-puzzle-8.png`에서 세 방의 스위치·문·표식 배치를 시각 확인했다.
+- 자동 테스트에서 온라인 컨트롤러를 비활성화하면 승인 콜백도 등록되지 않아 접속이 멈추던 문제를 수정했다. 개발 테스트의 직접 localhost 접속에만 ConnectionApproval을 끄며, 일반 로비 승인 동작은 유지한다. 클라이언트의 마지막 구간 검사를 퍼즐 배열 길이 기준으로 바꾸고 `-gravityCoopLabs`로 신규 세 방만 검사할 수 있게 했다.
+- 실제 두 사람의 재미, 우회 풀이, 시점 조작감과 인터넷 Relay 왕복은 이번 자동 검사에서 검증하지 않았다. 역할 교대와 기존 3번 대비 평가 항목은 `gravity_coop_prototype_guide.md`에 정리했다.
+- 씬과 `Builds/GravityPrototype/GravityPrototype.exe`를 갱신했다. 빌드가 자동으로 변경한 무관한 렌더/프로젝트 설정은 작업 전 내용으로 복원했다.

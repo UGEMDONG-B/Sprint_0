@@ -15,6 +15,7 @@ namespace Sprint0.Editor
     {
         public const string ScenePath = "Assets/Scenes/GravityPrototype.unity";
         const string Materials = "Assets/_Project/Materials/Gravity";
+        const int PuzzleCount = 8;
 
         [MenuItem("Tools/Sprint 0/Build Gravity Prototype")]
         public static void Build()
@@ -35,8 +36,8 @@ namespace Sprint0.Editor
             var gameObject = new GameObject("Gravity Game — tune gameplay here");
             gameObject.AddComponent<NetworkObject>();
             var game = gameObject.AddComponent<GravityGame>();
-            game.puzzles = new GravityPuzzle[5];
-            for (int i = 0; i < 5; i++) game.puzzles[i] = Room(i);
+            game.puzzles = new GravityPuzzle[PuzzleCount];
+            for (int i = 0; i < PuzzleCount; i++) game.puzzles[i] = Room(i);
 
             var actor = new GameObject("Runner — server simulated");
             actor.transform.position = game.puzzles[0].spawn.position;
@@ -101,11 +102,11 @@ namespace Sprint0.Editor
                             && property.objectReferenceInstanceIDValue != 0)
                             throw new System.Exception("Missing reference: " + component.name + "." + property.propertyPath);
                 }
-            if (game.runner == null || game.runner.visual == null || game.puzzles.Length != 5) throw new System.Exception("Invalid prototype configuration");
+            if (game.runner == null || game.runner.visual == null || game.puzzles.Length != PuzzleCount) throw new System.Exception("Invalid prototype configuration");
             foreach (var puzzle in game.puzzles)
                 if (puzzle.spawn == null || puzzle.exit == null || puzzle.boxes.Any(b => b == null)
                     || puzzle.plates.Any(p => p == null) || puzzle.hazards.Any(h => h == null)) throw new System.Exception("Invalid puzzle references");
-            Debug.Log($"[Gravity] Validated {components} components; no missing scripts/references; five configured puzzles.");
+            Debug.Log($"[Gravity] Validated {components} components; no missing scripts/references; {game.puzzles.Length} configured puzzles.");
         }
 
         static void ImportSharedInterface(Scene destination, NetworkManager manager)
@@ -138,13 +139,16 @@ namespace Sprint0.Editor
             root.AddComponent<NetworkObject>();
             var puzzle = root.AddComponent<GravityPuzzle>();
             puzzle.index = index;
-            puzzle.title = new[] { "벽으로 건너가기", "상자 주차", "두 갈래 배송", "공중 환승", "두 상자와 탈출로" }[index];
+            puzzle.title = new[] { "벽으로 건너가기", "상자 주차", "두 갈래 배송", "공중 환승", "두 상자와 탈출로", "받고 다시 보내기", "둘 다 준비됐어?", "보관하고 길 열기" }[index];
             puzzle.objective = new[] {
                 "받침의 앞뒤를 확인하고 벽 너머로 건너가세요. 상대에게 출발 위치를 알려주세요.",
                 "P 홈에 상자를 보관하세요. 다음 중력에서도 압력판을 유지할 수 있을까요?",
                 "A로 넣고 B로 배송하세요. 레버와 상자의 통과 시점을 함께 판단하세요.",
                 "점프 신호에 맞춰 중력을 바꾸고 넓은 발판으로 환승하세요. 바닥에서 재도전할 수 있습니다.",
-                "P와 Q에 상자를 보관하고 탈출하세요. 분기 전환 전에 두 상자의 낙하 경로를 확인하세요."
+                "P와 Q에 상자를 보관하고 탈출하세요. 분기 전환 전에 두 상자의 낙하 경로를 확인하세요.",
+                "상자를 A로 올린 뒤 천장의 스위치로 이동하세요. 내부 플레이어의 다음 행동을 기다렸다가 B로 배송하세요.",
+                "P와 Q의 발사 위치를 함께 준비하세요. 두 상자가 안착하면 뒤쪽 탈출 경로로 이동한 뒤 오른쪽 중력을 요청하세요.",
+                "P를 보관한 채 Q를 A로 올리세요. A를 지나 뒤쪽 천장 스위치를 열고, 탈출 경로로 빠진 뒤 B로 보내세요."
             }[index];
             var parent = root.transform;
             var wall = new Color(0.15f, 0.21f, 0.29f);
@@ -177,16 +181,26 @@ namespace Sprint0.Editor
                 exitPosition = new Vector3(11.5f, 8, 1.8f);
                 exitSize = new Vector3(1.2f, 2.4f, 1.4f);
             }
-            if (index == 2 || index == 4)
+            if (index == 2 || index == 4 || index == 5 || index == 7)
             {
-                float intake = index == 2 ? -4 : 2;
-                float divider = index == 2 ? 0 : 6;
-                float left = index == 2 ? -12 : 0;
+                bool singleDelivery = index == 2 || index == 5;
+                float intake = singleDelivery ? -4 : 2;
+                float divider = singleDelivery ? 0 : 6;
+                float left = singleDelivery ? -12 : 0;
                 float leftWidth = intake - 1.2f - left;
                 Block(parent, "Intake shelf left", new Vector3(left + leftWidth / 2, 10, 0), new Vector3(leftWidth, 0.4f, 6), wall);
                 float rightWidth = 12 - (intake + 1.2f);
                 Block(parent, "Intake shelf right", new Vector3(intake + 1.2f + rightWidth / 2, 10, 0), new Vector3(rightWidth, 0.4f, 6), wall);
-                if (index == 4)
+                if (index == 5 || index == 7)
+                {
+                    // After joining the crate upstairs, the runner needs a return path
+                    // that stays open when A closes. Crate delivery remains in the front lane.
+                    var returnShelf = parent.Find("Intake shelf right");
+                    returnShelf.localPosition += Vector3.back;
+                    returnShelf.localScale = new Vector3(rightWidth, 0.4f, 4);
+                    Label(parent, "REAR / RETURN", new Vector3(8, 9, 1.8f));
+                }
+                if (!singleDelivery)
                     Block(parent, "Branch outer wall", new Vector3(0, 13, 0), new Vector3(0.4f, 6, 6), wall);
                 puzzle.routeA = Block(parent, "Route A — inlet", new Vector3(intake, 10, 0), new Vector3(2.4f, 0.4f, 6), new Color(0.15f, 0.65f, 0.95f)).GetComponent<BoxCollider>();
                 puzzle.routeB = Block(parent, "Route B — delivery", new Vector3(divider, 13, 0), new Vector3(0.4f, 6, 6), new Color(0.8f, 0.4f, 0.95f)).GetComponent<BoxCollider>();
@@ -195,10 +209,18 @@ namespace Sprint0.Editor
                 puzzle.lever = Volume(parent, "Route selector", new Vector3(intake - 2.2f, 9.1f, -1.5f), new Vector3(0.5f, 0.7f, 0.5f), Color.magenta).transform;
                 Label(parent, "A / IN", new Vector3(intake, 10.8f, -2.95f));
                 Label(parent, "B / OUT", new Vector3(divider + 0.8f, 12.8f, -2.95f));
-                Label(parent, "E / A-B", new Vector3(intake - 2.2f, 8.5f, -2.5f));
+                if (index == 5 || index == 7)
+                {
+                    // A safe stopping point separates loading from the runner's next action.
+                    // The operator must wait for the runner to reach the existing selector.
+                    var switchPosition = index == 5 ? new Vector3(-8, 15.1f, -1.5f) : new Vector3(4.5f, 15.1f, 1.8f);
+                    puzzle.lever.localPosition = switchPosition;
+                    Label(parent, "WAIT / SWITCH", switchPosition + new Vector3(0, -1.3f, -0.6f));
+                }
+                Label(parent, "E / A-B", puzzle.lever.localPosition + new Vector3(0, -0.6f, -1));
                 var delivery = Volume(parent, "Q delivery plate", new Vector3(11.65f, 15, 0), new Vector3(0.7f, 2, 5.8f), Color.yellow);
                 Label(parent, "Q / WEIGHT", new Vector3(10.8f, 14.5f, -2.8f));
-                if (index == 2)
+                if (singleDelivery)
                 {
                     puzzle.boxes = new[] { Box(parent, index, new Vector3(-7, 0.6f, 0)) };
                     puzzle.plates = new[] { delivery };
@@ -207,12 +229,27 @@ namespace Sprint0.Editor
                 {
                     puzzle.boxes = new[] { Box(parent, index, new Vector3(-9, 0.6f, 0)), Box(parent, index, new Vector3(-1, 0.6f, 0)) };
                     puzzle.plates = new[] { ParkingHome(parent, -8.2f, "P", wall), delivery };
-                    // The lip makes preparing a launch position useful before the rightward transfer.
-                    Block(parent, "Exit approach lip", new Vector3(11.25f, 7.9f, 0), new Vector3(1.5f, 0.4f, 6), wall);
-                    Label(parent, "LAUNCH", new Vector3(8, 9, -2.8f));
+                    if (index == 4)
+                    {
+                        // The lip makes preparing a launch position useful before the rightward transfer.
+                        Block(parent, "Exit approach lip", new Vector3(11.25f, 7.9f, 0), new Vector3(1.5f, 0.4f, 6), wall);
+                        Label(parent, "LAUNCH", new Vector3(8, 9, -2.8f));
+                    }
                 }
-                exitPosition = new Vector3(11.5f, index == 2 ? 7 : 5.8f, 1.8f);
+                exitPosition = new Vector3(11.5f, singleDelivery ? 7 : 5.8f, 1.8f);
                 exitSize = new Vector3(1.2f, 2, 1.4f);
+            }
+            if (index == 6)
+            {
+                puzzle.boxes = new[] { Box(parent, index, new Vector3(-9, 0.6f, 0)), Box(parent, index, new Vector3(-1, 0.6f, 0)) };
+                puzzle.plates = new[] { ParkingHome(parent, -6, "P", wall), ParkingHome(parent, 4, "Q", wall) };
+                // Front pockets retain both crates; the rear lane lets the runner pass the lips.
+                Block(parent, "Front exit baffle — prepare rear lane", new Vector3(8, 13, -1), new Vector3(0.5f, 6, 3), wall);
+                Label(parent, "P / LOAD", new Vector3(-6, 1.5f, -2.7f));
+                Label(parent, "Q / LOAD", new Vector3(4, 1.5f, -2.7f));
+                Label(parent, "REAR / READY", new Vector3(8, 11, 1.8f));
+                exitPosition = new Vector3(11.5f, 8, 1.8f);
+                exitSize = new Vector3(1.2f, 2.4f, 1.4f);
             }
             if (index == 3)
             {
