@@ -8,12 +8,14 @@ using UnityEngine;
 namespace Sprint0.GravityCoop
 {
     // Development-only, opt-in two-process integration test. No test controls in normal play.
+    [DefaultExecutionOrder(1000)]
     public sealed class GravitySmokeTest : MonoBehaviour
     {
         GravityGame game;
         NetworkManager manager;
         bool failed;
         int checks;
+        bool checkCamera;
         const string Channel = "GravitySmokeInput";
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -64,11 +66,8 @@ namespace Sprint0.GravityCoop
                 Debug.Log("[GravityTest] CLIENT connected; authoritative input relay ready");
                 game.ChangeGravityRpc(GravityDirection.Right); // Must be rejected by the server's role check.
                 yield return new WaitForSeconds(1);
-                Check(!Camera.main.orthographic, "Runner uses perspective camera");
-                Check(Vector3.Distance(Camera.main.transform.position, game.runner.transform.position + Vector3.up * game.eyeHeight) < 0.02f,
-                    "First-person eye starts above runner center");
-                foreach (var renderer in game.runner.visual.GetComponentsInChildren<Renderer>(true))
-                    Check(renderer.forceRenderingOff, "Runner body hidden on local client");
+                checkCamera = true;
+                while (checkCamera) yield return null;
                 Capture("runner");
                 float deadline = Time.realtimeSinceStartup + 540;
                 while (game != null && !game.Finished.Value && manager.IsConnectedClient && Time.realtimeSinceStartup < deadline) yield return null;
@@ -187,6 +186,8 @@ namespace Sprint0.GravityCoop
             if (failed) yield break;
 
             // P2: place a crate inside the retaining lip, then take the independent front/back route.
+            yield return VerifyCarrying();
+            game.ResetSection();
             yield return Wait(0.5f);
             game.InteractRpc();
             Check(game.HeldBox.Value == -1, "Operator cannot pick up crates");
@@ -407,18 +408,73 @@ namespace Sprint0.GravityCoop
             reader.ReadValueSafe(out Vector2 move);
             reader.ReadValueSafe(out bool jump);
             reader.ReadValueSafe(out bool interact);
+            reader.ReadValueSafe(out float lookYaw);
+            if (float.IsFinite(lookYaw)) game.LookRpc(lookYaw);
             game.MoveRpc(move, jump);
             if (interact) game.InteractRpc();
         }
 
-        void Input(Vector2 move, bool jump = false, bool interact = false)
+        void LateUpdate()
+        {
+            if (!checkCamera) return;
+            checkCamera = false;
+            // Sample after GravityGame updates the camera, not between a network teleport and LateUpdate.
+            Check(!Camera.main.orthographic, "Runner uses perspective camera");
+            Check(Mathf.Abs(Vector3.Distance(Camera.main.transform.position, game.runner.transform.position) - game.eyeHeight) < 0.02f,
+                "First-person eye stays inside runner hull");
+            foreach (var renderer in game.runner.visual.GetComponentsInChildren<Renderer>(true))
+                Check(renderer.forceRenderingOff, "Runner body hidden on local client");
+        }
+
+        void Input(Vector2 move, bool jump = false, bool interact = false, float lookYaw = float.NaN)
         {
             using var writer = new FastBufferWriter(32, Allocator.Temp);
             writer.WriteValueSafe(move);
             writer.WriteValueSafe(jump);
             writer.WriteValueSafe(interact);
+            writer.WriteValueSafe(lookYaw);
             foreach (ulong client in manager.ConnectedClientsIds)
                 if (client != NetworkManager.ServerClientId) manager.CustomMessagingManager.SendNamedMessage(Channel, client, writer);
+        }
+
+        IEnumerator VerifyCarrying()
+        {
+            var origin = game.Current.transform.position;
+            var box = game.Current.boxes[0];
+            game.runner.Restore(origin + new Vector3(-9.6f, 0.55f, 0));
+            yield return Wait(0.3f);
+            Input(Vector2.zero, interact: true, lookYaw: 90);
+            yield return Wait(0.3f);
+            Check(game.HeldBox.Value == 0, "Pickup measures crate surface, not center");
+            yield return Drive(Vector2.left, 0.15f);
+            Check(game.HeldBox.Value == 0 && box.Body.position.x > game.runner.Body.position.x + 0.8f,
+                "Backing up keeps crate in view");
+            yield return Drive(Vector2.up, 0.15f);
+            Check(game.HeldBox.Value == 0 && box.Body.position.x > game.runner.Body.position.x + 0.8f,
+                "Strafing keeps crate in view");
+            Input(Vector2.zero, interact: true);
+            yield return Wait(0.2f);
+            Check(game.HeldBox.Value == -1, "Explicit release still works");
+
+            game.ResetSection();
+            game.runner.Restore(origin + new Vector3(-8.25f, 0.55f, 0));
+            yield return Wait(0.3f);
+            Input(Vector2.zero, interact: true, lookYaw: 90);
+            yield return Wait(0.2f);
+            var wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            wall.name = "Carry regression wall";
+            wall.transform.position = origin + new Vector3(-5.5f, 1.5f, 0);
+            wall.transform.localScale = new Vector3(0.5f, 3, 4);
+            Physics.SyncTransforms();
+            yield return Drive(Vector2.right, 0.5f);
+            Check(game.HeldBox.Value == 0, "Wall contact does not drop crate");
+            Check(box.Body.position.x < origin.x - 6.2f, "Held crate stops before wall");
+            wall.SetActive(false);
+            yield return Wait(0.3f);
+            Check(game.HeldBox.Value == 0 && box.Body.position.x > game.runner.Body.position.x + 1,
+                "Carry resumes after obstacle clears");
+            Destroy(wall);
+            game.ResetSection();
         }
 
         IEnumerator Wait(float seconds)

@@ -37,6 +37,8 @@ namespace Sprint0.GravityCoop
         float cameraYaw;
         float cameraPitch;
         Renderer[] runnerRenderers;
+        float runnerLookYaw;
+        bool hasRunnerLook;
 
         public override void OnNetworkSpawn()
         {
@@ -117,10 +119,15 @@ namespace Sprint0.GravityCoop
                 move = CameraRelativeInput(move, cameraYaw);
                 if (Time.unscaledTime >= inputAt || jump)
                 {
+                    LookRpc(cameraYaw);
                     MoveRpc(move, jump);
                     inputAt = Time.unscaledTime + 1f / 30;
                 }
-                if (Cursor.lockState == CursorLockMode.Locked && keyboard.eKey.wasPressedThisFrame) InteractRpc();
+                if (Cursor.lockState == CursorLockMode.Locked && keyboard.eKey.wasPressedThisFrame)
+                {
+                    LookRpc(cameraYaw);
+                    InteractRpc();
+                }
             }
         }
 
@@ -178,17 +185,27 @@ namespace Sprint0.GravityCoop
         }
 
         [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
+        public void LookRpc(float yaw, RpcParams rpc = default)
+        {
+            if (!Playing || !IsRunner(rpc.Receive.SenderClientId) || !float.IsFinite(yaw)) return;
+            runnerLookYaw = Mathf.Repeat(yaw, 360);
+            hasRunnerLook = true;
+        }
+
+        [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
         public void ResetRpc(RpcParams rpc = default)
         {
             if (NetworkManager.ConnectedClients.ContainsKey(rpc.Receive.SenderClientId)) ResetSection();
         }
 
-        bool Reachable(Vector3 point, Transform target)
+        bool Reachable(Collider target, out float distance)
         {
-            if (Vector3.Distance(runner.Body.position, point) > interactionDistance) return false;
+            var point = target.ClosestPoint(runner.Body.position);
+            distance = Vector3.Distance(runner.Body.position, point);
+            if (distance > interactionDistance) return false;
             foreach (var hit in Physics.RaycastAll(runner.Body.position, point - runner.Body.position,
-                Vector3.Distance(runner.Body.position, point), ~0, QueryTriggerInteraction.Ignore))
-                if (hit.rigidbody != runner.Body && hit.transform != target) return false;
+                distance, ~0, QueryTriggerInteraction.Ignore))
+                if (hit.rigidbody != runner.Body && hit.collider != target) return false;
             return true;
         }
 
@@ -197,18 +214,18 @@ namespace Sprint0.GravityCoop
         {
             if (!Playing || !IsRunner(rpc.Receive.SenderClientId)) return;
             if (HeldBox.Value >= 0) { Drop(); return; }
-            if (Current.lever != null && Reachable(Current.lever.position, Current.lever))
-            {
-                Current.TryToggleRoute();
-                return;
-            }
             int closest = -1;
             float distance = interactionDistance;
+            bool useLever = Current.lever != null && Reachable(Current.lever.GetComponent<Collider>(), out distance);
+            if (!useLever) distance = interactionDistance;
             for (int i = 0; i < Current.boxes.Length; i++)
             {
                 var box = Current.boxes[i];
-                float candidate = Vector3.Distance(runner.Body.position, box.Body.position);
-                if (box.carryable && candidate < distance && Reachable(box.Body.position, box.transform)) { closest = i; distance = candidate; }
+                if (box.carryable && Reachable(box.GetComponent<Collider>(), out float candidate) && candidate <= distance)
+                {
+                    closest = i;
+                    distance = candidate;
+                }
             }
             if (closest >= 0)
             {
@@ -218,6 +235,7 @@ namespace Sprint0.GravityCoop
                 box.Body.isKinematic = true;
                 Physics.IgnoreCollision(runner.GetComponent<Collider>(), box.GetComponent<Collider>(), true);
             }
+            else if (useLever) Current.TryToggleRoute();
         }
 
         void Drop()
@@ -239,23 +257,31 @@ namespace Sprint0.GravityCoop
                 if (Vector3.Distance(box.Body.position, Current.transform.position + Vector3.up * 8) > 26) { Die(); return; }
             if (HeldBox.Value < 0) return;
             var held = Current.boxes[HeldBox.Value];
-            var target = runner.Body.position + runner.Facing * 1.25f - Down * carryClearance;
+            // Strafing and backing up must not swing the held crate around the player.
+            var facing = hasRunnerLook
+                ? Quaternion.LookRotation(Vector3.forward, -Down) * Quaternion.Euler(0, runnerLookYaw, 0) * Vector3.forward
+                : runner.Facing;
+            var target = runner.Body.position + facing * 1.25f - Down * carryClearance;
+            // Release only when the player actually leaves a blocked crate behind, not on contact.
+            if (Vector3.Distance(runner.Body.position, held.Body.position) > interactionDistance + 1f)
+            {
+                Drop();
+                return;
+            }
             // Sweep the entire path: a held box must never teleport through a wall or door.
             var delta = target - held.Body.position;
+            float travel = delta.magnitude;
             foreach (var hit in Physics.BoxCastAll(held.Body.position, Vector3.one * 0.48f, delta.normalized,
                 held.Body.rotation, delta.magnitude, ~0, QueryTriggerInteraction.Ignore))
                 if (hit.rigidbody != held.Body && hit.rigidbody != runner.Body)
                 {
-                    if (System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "-gravitySmoke") >= 0)
-                        Debug.Log($"[GravityTest] Carry sweep blocked by {hit.collider.name} at {held.Body.position} -> {target}");
-                    Drop(); return;
+                    travel = Mathf.Min(travel, Mathf.Max(0, hit.distance - 0.03f));
                 }
+            target = held.Body.position + delta.normalized * travel;
             foreach (var col in Physics.OverlapBox(target, Vector3.one * 0.48f, held.Body.rotation, ~0, QueryTriggerInteraction.Ignore))
                 if (col.attachedRigidbody != held.Body && col.attachedRigidbody != runner.Body)
                 {
-                    if (System.Array.IndexOf(System.Environment.GetCommandLineArgs(), "-gravitySmoke") >= 0)
-                        Debug.Log($"[GravityTest] Carry destination blocked by {col.name}");
-                    Drop(); return;
+                    return;
                 }
             held.Body.MovePosition(target);
         }
@@ -273,6 +299,7 @@ namespace Sprint0.GravityCoop
             if (!IsServer) return;
             Drop();
             Direction.Value = GravityDirection.Down;
+            hasRunnerLook = false;
             NextGravityTime.Value = 0;
             SectionStarted.Value = NetworkManager.ServerTime.Time;
             Dead.Value = false;
