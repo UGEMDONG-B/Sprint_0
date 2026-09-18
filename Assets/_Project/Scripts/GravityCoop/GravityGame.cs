@@ -15,12 +15,10 @@ namespace Sprint0.GravityCoop
         [Min(0.1f)] public float interactionDistance = 2.2f;
         [Min(0)] public float carryClearance = 0.3f;
         [Min(0.1f)] public float cameraRotationSpeed = 5f;
-        public float runnerCameraDistance = 7f;
-        [Header("Runner camera")]
+        [Header("Runner first-person camera")]
+        [Range(0, 0.3f)] public float eyeHeight = 0.25f;
         [Min(0.01f)] public float mouseSensitivity = 0.12f;
-        public Vector2 pitchLimits = new(-65, 75);
-        public Vector2 zoomLimits = new(1.5f, 9f);
-        [Min(0.01f)] public float cameraCollisionRadius = 0.2f;
+        public Vector2 pitchLimits = new(-85, 85);
         public float observerElevation = 3f;
         public GravityRunner runner;
         public GravityPuzzle[] puzzles;
@@ -37,7 +35,22 @@ namespace Sprint0.GravityCoop
         float inputAt;
         Quaternion gravityCameraFrame = Quaternion.identity;
         float cameraYaw;
-        float cameraPitch = 12;
+        float cameraPitch;
+        Renderer[] runnerRenderers;
+
+        public override void OnNetworkSpawn()
+        {
+            runnerRenderers = runner.visual.GetComponentsInChildren<Renderer>(true);
+            foreach (var renderer in runnerRenderers) renderer.forceRenderingOff = !IsOperator;
+        }
+
+        public override void OnNetworkDespawn()
+        {
+            if (runnerRenderers != null)
+                foreach (var renderer in runnerRenderers)
+                    if (renderer != null) renderer.forceRenderingOff = false;
+            ReleaseCursor();
+        }
         public Vector3 Down => DirectionVector(Direction.Value);
         public bool Playing => IsSpawned && Ready.Value && !Dead.Value && !Finished.Value;
         public bool IsOperator => IsSpawned && NetworkManager.LocalClientId == Unity.Netcode.NetworkManager.ServerClientId;
@@ -145,7 +158,6 @@ namespace Sprint0.GravityCoop
             var delta = mouse.delta.ReadValue();
             cameraYaw = Mathf.Repeat(cameraYaw + delta.x * mouseSensitivity, 360);
             cameraPitch = Mathf.Clamp(cameraPitch - delta.y * mouseSensitivity, pitchLimits.x, pitchLimits.y);
-            runnerCameraDistance = Mathf.Clamp(runnerCameraDistance - mouse.scroll.ReadValue().y * 0.01f, zoomLimits.x, zoomLimits.y);
         }
 
         bool IsRunner(ulong sender) => sender != Unity.Netcode.NetworkManager.ServerClientId && NetworkManager.ConnectedClients.ContainsKey(sender);
@@ -300,16 +312,10 @@ namespace Sprint0.GravityCoop
                 var desired = Quaternion.LookRotation(Vector3.forward, -Down);
                 gravityCameraFrame = Quaternion.Slerp(gravityCameraFrame, desired, 1 - Mathf.Exp(-cameraRotationSpeed * Time.deltaTime));
                 var rotation = gravityCameraFrame * Quaternion.Euler(cameraPitch, cameraYaw, 0);
-                // Start inside the runner hull so a gravity turn cannot put the cast origin through a wall.
-                var pivot = runner.transform.position;
-                var backward = rotation * Vector3.back;
-                float distance = Mathf.Clamp(runnerCameraDistance, zoomLimits.x, zoomLimits.y);
-                foreach (var hit in Physics.SphereCastAll(pivot, cameraCollisionRadius, backward, distance, ~0, QueryTriggerInteraction.Ignore))
-                {
-                    if (hit.rigidbody == runner.Body || hit.collider.name == "Invisible front boundary") continue;
-                    distance = Mathf.Min(distance, Mathf.Max(0, hit.distance - 0.05f));
-                }
-                camera.transform.SetPositionAndRotation(pivot + backward * distance, rotation);
+                // Keep the eye inside the spherical collision hull, including during gravity turns.
+                // Use the gravity frame rather than look pitch so looking down does not move the eye.
+                var eye = runner.transform.position + gravityCameraFrame * Vector3.up * Mathf.Clamp(eyeHeight, 0, 0.3f);
+                camera.transform.SetPositionAndRotation(eye, rotation);
             }
         }
     }

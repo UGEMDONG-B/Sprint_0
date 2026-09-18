@@ -13170,11 +13170,9 @@ MonoBehaviour:
   interactionDistance: 2.2
   carryClearance: 0.3
   cameraRotationSpeed: 5
-  runnerCameraDistance: 7
+  eyeHeight: 0.25
   mouseSensitivity: 0.12
-  pitchLimits: {x: -65, y: 75}
-  zoomLimits: {x: 1.5, y: 9}
-  cameraCollisionRadius: 0.2
+  pitchLimits: {x: -85, y: 85}
   observerElevation: 3
   runner: {fileID: 326069252}
   puzzles:

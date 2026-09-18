@@ -64,6 +64,11 @@ namespace Sprint0.GravityCoop
                 Debug.Log("[GravityTest] CLIENT connected; authoritative input relay ready");
                 game.ChangeGravityRpc(GravityDirection.Right); // Must be rejected by the server's role check.
                 yield return new WaitForSeconds(1);
+                Check(!Camera.main.orthographic, "Runner uses perspective camera");
+                Check(Vector3.Distance(Camera.main.transform.position, game.runner.transform.position + Vector3.up * game.eyeHeight) < 0.02f,
+                    "First-person eye starts above runner center");
+                foreach (var renderer in game.runner.visual.GetComponentsInChildren<Renderer>(true))
+                    Check(renderer.forceRenderingOff, "Runner body hidden on local client");
                 Capture("runner");
                 float deadline = Time.realtimeSinceStartup + 540;
                 while (game != null && !game.Finished.Value && manager.IsConnectedClient && Time.realtimeSinceStartup < deadline) yield return null;
@@ -76,6 +81,9 @@ namespace Sprint0.GravityCoop
             }
             yield return new WaitForSeconds(1);
             Capture("operator");
+            Check(Camera.main.orthographic, "Operator retains overview camera");
+            foreach (var renderer in game.runner.visual.GetComponentsInChildren<Renderer>(true))
+                Check(!renderer.forceRenderingOff, "Runner remains visible to operator");
             Check(game.Direction.Value == GravityDirection.Down, "Runner cannot change gravity");
             foreach (var root in game.gameObject.scene.GetRootGameObjects())
                 foreach (var component in root.GetComponentsInChildren<Component>(true)) Check(component != null, "No missing component");

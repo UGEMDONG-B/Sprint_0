@@ -141,3 +141,12 @@ Relay 드라이버 생성 전에 적용되며 도메인 재로드를 끈 Play �
 - `Logs/gravity-communication-client.log`: CLIENT PASS, 8번 최종 완료/출구 상태 동기화 통과.
 - `Logs/gravity-communication-preview.log`: 저장 씬 렌더 성공. `gravity-communication-operator.png`, `gravity-communication-runner.png`, `gravity-communication-runner-rear.png`에서 전체 시점과 내부 앞뒤 시점의 배치 구역 및 표식 가독성을 확인했다. 이는 실제 마우스 조작감이나 모든 카메라 각도의 시인성을 보장하는 검사는 아니다.
 - 씬과 개발 실행 파일 갱신. Unity가 생성한 무관한 프로젝트/렌더 설정 변경은 복원했다. 위치 미세 지시 감소와 판단 주도권 변화는 동일한 두 사람의 재플레이로 검증한다.
+
+## 내부 플레이어 1인칭 시점 (2026-09-19)
+
+- GravityPrototype 내부 플레이어 카메라를 눈높이 1인칭으로 변경했다. 눈 위치는 플레이어 중심에서 중력 기준 위쪽 0.25이며 충돌체 안쪽으로 제한한다. 마우스 상하 회전은 -85~85도, 초기 시선은 수평이다. 휠 거리 조절을 제거했다.
+- 자기 캐릭터의 렌더러는 내부 플레이어에서만 숨기며 조작자 전체 시점에서는 계속 표시한다. 중력 기준축의 부드러운 회전, 시선 기준 이동, 기존 커서/설정 조작을 유지했다.
+- `Logs/gravity-first-person-build.log`: Unity 6000.3.10f1 개발 빌드 성공, 8개 퍼즐과 993개 컴포넌트 참조 검사 통과. 실행 파일은 `Builds/GravityPrototype/GravityPrototype.exe`에 갱신했다.
+- `Logs/gravity-first-person-host.log`: HOST PASS 1074 checks. 네 중력 방향 이동/점프, 조작자 카메라/캐릭터 표시, 8개 퍼즐 연속 완료 통과.
+- `Logs/gravity-first-person-client.log`: CLIENT PASS. 1인칭 눈 위치, 원근 카메라, 로컬 몸 숨김과 최종 완료 동기화 검사 통과.
+- 로컬 두 프로세스 자동 검사이며 실제 마우스 조작감, 시각적 편안함, 인터넷 Relay 접속은 이번 검사 범위에 포함되지 않는다.
