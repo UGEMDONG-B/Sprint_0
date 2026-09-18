@@ -143,7 +143,7 @@ namespace Sprint0.Editor
             puzzle.objective = new[] {
                 "받침의 앞뒤를 확인하고 벽 너머로 건너가세요. 상대에게 출발 위치를 알려주세요.",
                 "P 홈에 상자를 보관하세요. 다음 중력에서도 압력판을 유지할 수 있을까요?",
-                "A로 넣고 B로 배송하세요. 레버와 상자의 통과 시점을 함께 판단하세요.",
+                "하늘색 A 구역 안에 상자를 놓고 준비 신호를 주세요. A로 올린 뒤 B를 열어 Q로 배송하세요.",
                 "점프 신호에 맞춰 중력을 바꾸고 넓은 발판으로 환승하세요. 바닥에서 재도전할 수 있습니다.",
                 "P와 Q에 상자를 보관하고 탈출하세요. 분기 전환 전에 두 상자의 낙하 경로를 확인하세요.",
                 "상자를 A로 올린 뒤 천장의 스위치로 이동하세요. 내부 플레이어의 다음 행동을 기다렸다가 B로 배송하세요.",
@@ -187,10 +187,11 @@ namespace Sprint0.Editor
                 float intake = singleDelivery ? -4 : 2;
                 float divider = singleDelivery ? 0 : 6;
                 float left = singleDelivery ? -12 : 0;
-                float leftWidth = intake - 1.2f - left;
+                float intakeHalfWidth = index == 2 ? 2.4f : 1.2f;
+                float leftWidth = intake - intakeHalfWidth - left;
                 Block(parent, "Intake shelf left", new Vector3(left + leftWidth / 2, 10, 0), new Vector3(leftWidth, 0.4f, 6), wall);
-                float rightWidth = 12 - (intake + 1.2f);
-                Block(parent, "Intake shelf right", new Vector3(intake + 1.2f + rightWidth / 2, 10, 0), new Vector3(rightWidth, 0.4f, 6), wall);
+                float rightWidth = 12 - (intake + intakeHalfWidth);
+                Block(parent, "Intake shelf right", new Vector3(intake + intakeHalfWidth + rightWidth / 2, 10, 0), new Vector3(rightWidth, 0.4f, 6), wall);
                 if (index == 5 || index == 7)
                 {
                     // After joining the crate upstairs, the runner needs a return path
@@ -202,13 +203,31 @@ namespace Sprint0.Editor
                 }
                 if (!singleDelivery)
                     Block(parent, "Branch outer wall", new Vector3(0, 13, 0), new Vector3(0.4f, 6, 6), wall);
-                puzzle.routeA = Block(parent, "Route A — inlet", new Vector3(intake, 10, 0), new Vector3(2.4f, 0.4f, 6), new Color(0.15f, 0.65f, 0.95f)).GetComponent<BoxCollider>();
+                puzzle.routeA = Block(parent, "Route A — inlet", new Vector3(intake, 10, 0), new Vector3(intakeHalfWidth * 2, 0.4f, 6), new Color(0.15f, 0.65f, 0.95f)).GetComponent<BoxCollider>();
                 puzzle.routeB = Block(parent, "Route B — delivery", new Vector3(divider, 13, 0), new Vector3(0.4f, 6, 6), new Color(0.8f, 0.4f, 0.95f)).GetComponent<BoxCollider>();
                 puzzle.routeA.enabled = false;
                 puzzle.routeA.GetComponent<Renderer>().enabled = false;
                 puzzle.lever = Volume(parent, "Route selector", new Vector3(intake - 2.2f, 9.1f, -1.5f), new Vector3(0.5f, 0.7f, 0.5f), Color.magenta).transform;
-                Label(parent, "A / IN", new Vector3(intake, 10.8f, -2.95f));
-                Label(parent, "B / OUT", new Vector3(divider + 0.8f, 12.8f, -2.95f));
+                if (index == 2)
+                {
+                    // Keep the switch under solid shelf beside the wider opening.
+                    puzzle.lever.localPosition = new Vector3(intake - intakeHalfWidth - 1, 9.1f, -1.5f);
+                    // Paint only: no collider, snapping, trigger, or extra puzzle condition.
+                    // A one-unit crate fully inside this area has generous aperture clearance.
+                    var pad = Block(parent, "A loading area — visual only", new Vector3(intake, 0.012f, 0),
+                        new Vector3(3.2f, 0.02f, 4), new Color(0.15f, 0.65f, 0.95f));
+                    Object.DestroyImmediate(pad.GetComponent<Collider>());
+                    Label(parent, "A / LOAD", new Vector3(intake, 1.3f, -2.5f)).color = new Color(0.15f, 0.65f, 0.95f);
+                    Label(parent, "FRONT", new Vector3(2, 0.8f, -2.6f));
+                    Label(parent, "REAR", new Vector3(2, 0.8f, 2.6f));
+                }
+                var inletLabel = Label(parent, "A / IN", new Vector3(intake, 10.8f, -2.95f));
+                var outletLabel = Label(parent, "B / OUT", new Vector3(divider + 0.8f, 12.8f, -2.95f));
+                if (index == 2)
+                {
+                    inletLabel.color = new Color(0.15f, 0.65f, 0.95f);
+                    outletLabel.color = new Color(0.8f, 0.4f, 0.95f);
+                }
                 if (index == 5 || index == 7)
                 {
                     // A safe stopping point separates loading from the runner's next action.
@@ -297,6 +316,9 @@ namespace Sprint0.Editor
             }
             foreach (var hazard in puzzle.hazards)
                 Hint(hazard, "위험 구역 · 빨강", "닿으면 현재 퍼즐이 처음 상태로 돌아갑니다.");
+            if (index == 2)
+                foreach (var label in parent.GetComponentsInChildren<TextMesh>())
+                    label.gameObject.AddComponent<GravityLandmark>();
             return puzzle;
         }
 
@@ -318,7 +340,7 @@ namespace Sprint0.Editor
             return plate;
         }
 
-        static void Label(Transform parent, string text, Vector3 position)
+        static TextMesh Label(Transform parent, string text, Vector3 position)
         {
             var obj = new GameObject(text);
             obj.transform.SetParent(parent, false);
@@ -331,6 +353,7 @@ namespace Sprint0.Editor
             label.characterSize = 0.1f;
             label.anchor = TextAnchor.MiddleCenter;
             label.color = Color.white;
+            return label;
         }
 
         static GravityBody Box(Transform parent, int puzzle, Vector3 position)
@@ -417,6 +440,28 @@ namespace Sprint0.Editor
             Capture(camera, "Logs/gravity-runner-preview.png");
         }
 
+        public static void CaptureCommunicationPreview()
+        {
+            var scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+            var game = Object.FindFirstObjectByType<GravityGame>();
+            Validate(scene, game);
+            var origin = game.puzzles[2].transform.position;
+            var camera = Camera.main;
+            camera.orthographic = true;
+            camera.orthographicSize = 10.5f;
+            camera.transform.SetPositionAndRotation(origin + new Vector3(0, 8 + game.observerElevation, -35),
+                Quaternion.LookRotation(new Vector3(0, -game.observerElevation, 35), Vector3.up));
+            Capture(camera, "Logs/gravity-communication-operator.png");
+            camera.orthographic = false;
+            camera.nearClipPlane = 0.05f;
+            camera.transform.position = origin + new Vector3(-8.5f, 3.5f, -2.5f);
+            camera.transform.rotation = Quaternion.LookRotation(origin + new Vector3(-3, 0.8f, 0) - camera.transform.position);
+            Capture(camera, "Logs/gravity-communication-runner.png");
+            camera.transform.position = origin + new Vector3(1, 3.5f, 2.5f);
+            camera.transform.rotation = Quaternion.LookRotation(origin + new Vector3(-4, 0.8f, 0) - camera.transform.position);
+            Capture(camera, "Logs/gravity-communication-runner-rear.png");
+        }
+
         public static void CaptureSharedInterface()
         {
             var scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
@@ -452,6 +497,8 @@ namespace Sprint0.Editor
 
         static void Capture(Camera camera, string path)
         {
+            foreach (var landmark in Object.FindObjectsByType<GravityLandmark>(FindObjectsSortMode.None))
+                landmark.FaceCamera(camera);
             var target = new RenderTexture(1280, 900, 24);
             camera.targetTexture = target;
             camera.Render();

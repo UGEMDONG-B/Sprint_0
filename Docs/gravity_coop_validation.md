@@ -131,3 +131,13 @@ Relay 드라이버 생성 전에 적용되며 도메인 재로드를 끈 Play �
 - 자동 테스트에서 온라인 컨트롤러를 비활성화하면 승인 콜백도 등록되지 않아 접속이 멈추던 문제를 수정했다. 개발 테스트의 직접 localhost 접속에만 ConnectionApproval을 끄며, 일반 로비 승인 동작은 유지한다. 클라이언트의 마지막 구간 검사를 퍼즐 배열 길이 기준으로 바꾸고 `-gravityCoopLabs`로 신규 세 방만 검사할 수 있게 했다.
 - 실제 두 사람의 재미, 우회 풀이, 시점 조작감과 인터넷 Relay 왕복은 이번 자동 검사에서 검증하지 않았다. 역할 교대와 기존 3번 대비 평가 항목은 `gravity_coop_prototype_guide.md`에 정리했다.
 - 씬과 `Builds/GravityPrototype/GravityPrototype.exe`를 갱신했다. 빌드가 자동으로 변경한 무관한 렌더/프로젝트 설정은 작업 전 내용으로 복원했다.
+
+## 3번 위치 전달 부담 완화 (2026-09-19)
+
+- 3번만 A 투입구 폭을 2.4 → 4.8로 확장하고 충돌체 없는 하늘색 배치 구역(3.2 × 4), A/B 색상 연결, 고정 FRONT/REAR 명칭을 추가했다. 스위치는 넓어진 입구 왼쪽의 막힌 선반 아래로 옮겼다.
+- `GravityLandmark`는 게임 카메라 갱신 후 각 로컬 카메라를 향해 TextMesh만 회전시킨다. 네트워크 물리나 퍼즐 정답 조건은 바꾸지 않는다. 3번의 기존 상자/출구 표식에도 적용했다.
+- `Logs/gravity-communication-build.log`: Unity 6000.3.10f1 Windows 개발 빌드 성공, 종료 코드 0. 8개 방, 993개 컴포넌트 참조 검사 통과.
+- `Logs/gravity-communication-host.log`: HOST PASS 1071 checks. A 중심에서 x ±1.55, z ±1.95인 두 위치에 상자를 배치한 물리 검사에서 투입구 통과 확인. 이어 초기 상태에서 실제 클라이언트 운반/스위치 RPC로 3번을 클리어하고 전체 8개 연속 진행 통과.
+- `Logs/gravity-communication-client.log`: CLIENT PASS, 8번 최종 완료/출구 상태 동기화 통과.
+- `Logs/gravity-communication-preview.log`: 저장 씬 렌더 성공. `gravity-communication-operator.png`, `gravity-communication-runner.png`, `gravity-communication-runner-rear.png`에서 전체 시점과 내부 앞뒤 시점의 배치 구역 및 표식 가독성을 확인했다. 이는 실제 마우스 조작감이나 모든 카메라 각도의 시인성을 보장하는 검사는 아니다.
+- 씬과 개발 실행 파일 갱신. Unity가 생성한 무관한 프로젝트/렌더 설정 변경은 복원했다. 위치 미세 지시 감소와 판단 주도권 변화는 동일한 두 사람의 재플레이로 검증한다.

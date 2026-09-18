@@ -207,12 +207,24 @@ namespace Sprint0.GravityCoop
             if (failed) yield break;
 
             // P3: load via A, wait until the inlet clears, switch B through a real client interaction.
+            // Test both lateral/depth margins of the painted area with actual gravity.
+            foreach (var offset in new[] { new Vector3(-1.55f, 0, -1.95f), new Vector3(1.55f, 0, 1.95f) })
+            {
+                game.ResetSection();
+                game.Current.boxes[0].Body.position = game.Current.transform.position + new Vector3(-4, 0.6f, 0) + offset;
+                Physics.SyncTransforms();
+                game.ChangeGravityRpc(GravityDirection.Up);
+                yield return Wait(2);
+                Check(game.Current.boxes[0].Body.position.y > 14, "P3 loading area margin clears widened inlet " + offset);
+            }
+            game.ResetSection();
             yield return Wait(0.5f);
             Input(Vector2.zero, false, true);
             yield return Wait(0.25f);
             yield return MoveX(-5.25f);
             Input(Vector2.zero, false, true);
             yield return Wait(0.4f);
+            yield return MoveX(-7.4f); // Runner chooses the solid shelf beside A before requesting Up.
             game.ChangeGravityRpc(GravityDirection.Up);
             yield return Wait(2);
             Check(game.Current.boxes[0].Body.position.y > 14, "Crate loaded through A");
