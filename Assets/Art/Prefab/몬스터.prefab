@@ -12,7 +12,11 @@ GameObject:
   - component: {fileID: 5924691785286104251}
   - component: {fileID: 3998863084938810135}
   - component: {fileID: 7978427779055787548}
-  m_Layer: 0
+  - component: {fileID: 8649814445342498847}
+  - component: {fileID: 2961100804807227347}
+  - component: {fileID: 4976680183851140167}
+  - component: {fileID: 6220707188729344811}
+  m_Layer: 9
   m_Name: "\uBAAC\uC2A4\uD130"
   m_TagString: Untagged
   m_Icon: {fileID: 0}
@@ -106,7 +110,7 @@ CapsuleCollider:
     serializedVersion: 2
     m_Bits: 0
   m_LayerOverridePriority: 0
-  m_IsTrigger: 0
+  m_IsTrigger: 1
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 2
@@ -114,3 +118,73 @@ CapsuleCollider:
   m_Height: 0.012287701
   m_Direction: 0
   m_Center: {x: 0, y: 0.0022174355, z: -5.9235512e-18}
+--- !u!114 &8649814445342498847
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6328918945333373244}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 04a6f8e956cc34c498d9f1182ffc7d22, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Sprint0.Prototype.MonsterHealth
+  hp: 2
+  experienceReward: 1
+--- !u!114 &2961100804807227347
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6328918945333373244}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: aa4e31ead3855ac449f06532938ab082, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Sprint0.Prototype.MonsterChaseController
+  target: {fileID: 0}
+  moveSpeed: 2.25
+  stopDistance: 1.1
+  rotationSharpness: 10
+--- !u!54 &4976680183851140167
+Rigidbody:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6328918945333373244}
+  serializedVersion: 5
+  m_Mass: 1
+  m_LinearDamping: 0
+  m_AngularDamping: 0.05
+  m_CenterOfMass: {x: 0, y: 0, z: 0}
+  m_InertiaTensor: {x: 1, y: 1, z: 1}
+  m_InertiaRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ImplicitCom: 1
+  m_ImplicitTensor: 1
+  m_UseGravity: 0
+  m_IsKinematic: 0
+  m_Interpolate: 1
+  m_Constraints: 84
+  m_CollisionDetection: 3
+--- !u!114 &6220707188729344811
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6328918945333373244}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: dc8e11b77cd7185478f74052fcd8d7f4, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::Sprint0.Prototype.MonsterContactDamage
+  attackDamage: 1
