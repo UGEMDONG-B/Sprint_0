@@ -50,9 +50,13 @@ namespace Sprint0.Prototype
         Vector3 rawTarget;
         bool initialized;
         int collisionCorrections;
+        bool useExternalTarget;
+        Vector3 externalTarget;
+        bool slotActive = true;
 
         public Vector3 CurrentTarget => smoothedTarget;
         public int BoneCount => chain.Count;
+        public bool SlotActive => slotActive;
         public Transform Tip
         {
             get
@@ -60,6 +64,26 @@ namespace Sprint0.Prototype
                 EnsureInitialized();
                 return chain.Count > 0 ? chain[^1] : null;
             }
+        }
+
+        public void SetLocalControl(bool localControl)
+        {
+            useExternalTarget = !localControl;
+            showDebugHud = slotActive && localControl;
+        }
+
+        public void SetSlotActive(bool value)
+        {
+            slotActive = value;
+            showDebugHud = slotActive && !useExternalTarget;
+            EnsureInitialized();
+            SetVisualVisibility(slotActive);
+        }
+
+        public void SetExternalTarget(Vector3 target)
+        {
+            externalTarget = target;
+            useExternalTarget = true;
         }
 
         public void ReplaceVisual(GameObject replacementPrefab)
@@ -89,6 +113,7 @@ namespace Sprint0.Prototype
             chain.Clear();
             initialized = false;
             EnsureInitialized();
+            SetVisualVisibility(slotActive);
         }
 
         void Awake()
@@ -103,12 +128,12 @@ namespace Sprint0.Prototype
 
         void LateUpdate()
         {
-            if (!EnsureInitialized() || aimingCamera == null)
+            if (!slotActive || !EnsureInitialized() || aimingCamera == null)
             {
                 return;
             }
 
-            rawTarget = FindAimPoint();
+            rawTarget = useExternalTarget ? externalTarget : FindAimPoint();
             smoothedTarget = Vector3.SmoothDamp(
                 smoothedTarget,
                 rawTarget,
@@ -232,6 +257,19 @@ namespace Sprint0.Prototype
             smoothedTarget = rawTarget;
             initialized = true;
             return aimingCamera != null;
+        }
+
+        void SetVisualVisibility(bool visible)
+        {
+            if (visualRoot == null)
+            {
+                return;
+            }
+
+            foreach (var renderer in visualRoot.GetComponentsInChildren<Renderer>(true))
+            {
+                renderer.enabled = visible;
+            }
         }
 
         Vector3 FindAimPoint()

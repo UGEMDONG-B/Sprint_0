@@ -1,10 +1,12 @@
+using Unity.Netcode;
 using UnityEngine;
 
 namespace Sprint0.Prototype
 {
     [DisallowMultipleComponent]
     [RequireComponent(typeof(Rigidbody))]
-    public sealed class MonsterChaseController : MonoBehaviour
+    [RequireComponent(typeof(NetworkObject))]
+    public sealed class MonsterChaseController : NetworkBehaviour
     {
         [SerializeField] Transform target;
         [SerializeField, Min(0f)] float moveSpeed = 2.25f;
@@ -27,6 +29,16 @@ namespace Sprint0.Prototype
                 | RigidbodyConstraints.FreezeRotationZ;
         }
 
+        public override void OnNetworkSpawn()
+        {
+            base.OnNetworkSpawn();
+            if (!IsServer)
+            {
+                body.linearVelocity = Vector3.zero;
+                body.isKinematic = true;
+            }
+        }
+
         public void Initialize(Transform chaseTarget)
         {
             target = chaseTarget;
@@ -44,6 +56,11 @@ namespace Sprint0.Prototype
 
         void FixedUpdate()
         {
+            if (IsSpawned && !IsServer)
+            {
+                return;
+            }
+
             if (Time.time < knockedBackUntil)
             {
                 return;

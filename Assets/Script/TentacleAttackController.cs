@@ -1,4 +1,6 @@
 using System;
+using Sprint0.Multiplayer;
+using Unity.Netcode;
 using UnityEngine;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
@@ -7,7 +9,7 @@ using UnityEngine.InputSystem;
 namespace Sprint0.Prototype
 {
     [DisallowMultipleComponent]
-    public sealed class TentacleAttackController : MonoBehaviour
+    public sealed class TentacleAttackController : NetworkBehaviour
     {
         const string EditorProjectilePath = "Assets/Art/Prefab/Attack_Standard.prefab";
 
@@ -25,7 +27,16 @@ namespace Sprint0.Prototype
         [SerializeField, Min(1f)] float aimDistance = 300f;
         [SerializeField] LayerMask aimMask = ~0;
 
-        public bool IsAttacking => characterMotor != null && characterMotor.IsAttacking;
+        bool localInputEnabled = true;
+        float nextLocalAttackTime;
+        float nextServerAttackTime;
+
+        public bool IsAttacking => Time.time < nextLocalAttackTime;
+
+        public void SetLocalInputEnabled(bool value)
+        {
+            localInputEnabled = value;
+        }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         static void EnsurePrototypeAttackController()
@@ -96,6 +107,11 @@ namespace Sprint0.Prototype
 
         void Update()
         {
+            if (!localInputEnabled)
+            {
+                return;
+            }
+
             if (progression == null)
             {
                 progression = GetComponent<TentacleProgression>();
@@ -105,7 +121,7 @@ namespace Sprint0.Prototype
                 ? progression.CurrentProjectilePrefab
                 : projectilePrefab;
             if (!WasAttackPressed() || selectedProjectile == null || tentacle == null
-                || characterMotor == null || characterMotor.IsMoving || characterMotor.IsAttacking
+                || characterMotor == null || IsTentacleMoving() || Time.time < nextLocalAttackTime
                 || (playerStats != null && playerStats.IsDead))
             {
                 return;
@@ -147,11 +163,64 @@ namespace Sprint0.Prototype
                 return;
             }
 
-            var effectiveAttackDelay = progression != null ? progression.AttackCooldown : attackDelay;
+            nextLocalAttackTime = Time.time + (progression != null ? progression.AttackCooldown : attackDelay);
+
+            if (IsSpawned)
+            {
+                var sharedWarrior = GetComponentInParent<SharedTentacleWarriorNetwork>();
+                var slot = sharedWarrior != null ? sharedWarrior.GetTentacleSlot(tentacle) : -1;
+                RequestFireServerRpc(slot, direction);
+                return;
+            }
+
+            SpawnProjectile(direction);
+        }
+
+        [Rpc(SendTo.Server)]
+        void RequestFireServerRpc(int slot, Vector3 direction, RpcParams rpcParams = default)
+        {
+            var sharedWarrior = GetComponentInParent<SharedTentacleWarriorNetwork>();
+            if (sharedWarrior == null
+                || sharedWarrior.GetTentacle(slot) != tentacle
+                || !sharedWarrior.IsClientAssignedToSlot(rpcParams.Receive.SenderClientId, slot)
+                || MultiplayerGameController.Instance == null
+                || !MultiplayerGameController.Instance.CanControlPlayer
+                || !IsFinite(direction)
+                || direction.sqrMagnitude <= 0.0001f
+                || Time.time < nextServerAttackTime
+                || characterMotor == null || sharedWarrior.IsSlotMoving(slot)
+                || (playerStats != null && playerStats.IsDead))
+            {
+                return;
+            }
+
+            var cooldown = progression != null ? progression.AttackCooldown : attackDelay;
+            nextServerAttackTime = Time.time + cooldown;
+            SpawnProjectile(direction.normalized);
+        }
+
+        bool IsTentacleMoving()
+        {
+            var sharedWarrior = GetComponentInParent<SharedTentacleWarriorNetwork>();
+            if (sharedWarrior == null)
+            {
+                return characterMotor != null && characterMotor.IsMoving;
+            }
+
+            return sharedWarrior.IsSlotMoving(sharedWarrior.GetTentacleSlot(tentacle));
+        }
+
+        void SpawnProjectile(Vector3 direction)
+        {
+            var tip = tentacle != null ? tentacle.Tip : null;
             var selectedProjectile = progression != null
                 ? progression.CurrentProjectilePrefab
                 : projectilePrefab;
-            characterMotor.LockMovementForAttack(effectiveAttackDelay);
+            if (tip == null || selectedProjectile == null)
+            {
+                return;
+            }
+
             var instance = Instantiate(
                 selectedProjectile,
                 tip.position,
@@ -172,7 +241,19 @@ namespace Sprint0.Prototype
             projectile.ConfigureEvolution(
                 progression != null ? progression.Evolution : TentacleEvolution.None,
                 progression);
+
+            var networkObject = instance.GetComponent<NetworkObject>();
+            if (IsSpawned && IsServer && networkObject != null)
+            {
+                networkObject.Spawn(true);
+            }
+
             projectile.Launch(direction, Mathf.Max(projectileSpeed, 28f), transform.root);
+        }
+
+        static bool IsFinite(Vector3 value)
+        {
+            return float.IsFinite(value.x) && float.IsFinite(value.y) && float.IsFinite(value.z);
         }
 
         static Vector2 ReadMousePosition()

@@ -1,10 +1,11 @@
 using System.Collections;
+using Unity.Netcode;
 using UnityEngine;
 
 namespace Sprint0.Prototype
 {
     [DisallowMultipleComponent]
-    public sealed class PlayerStats : MonoBehaviour
+    public sealed class PlayerStats : NetworkBehaviour
     {
         [Header("Stats")]
         [SerializeField, Min(1)] int maxHp = 10;
@@ -14,10 +15,21 @@ namespace Sprint0.Prototype
         ThirdPersonCharacterMotor motor;
         bool invincible;
 
-        public int CurrentHp { get; private set; }
+        readonly NetworkVariable<int> networkHp = new(
+            0,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server);
+        readonly NetworkVariable<bool> networkDead = new(
+            false,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server);
+        int localHp;
+        bool localDead;
+
+        public int CurrentHp => IsSpawned ? networkHp.Value : localHp;
         public int MaxHp => maxHp;
         public int AttackDamage => attackDamage;
-        public bool IsDead { get; private set; }
+        public bool IsDead => IsSpawned ? networkDead.Value : localDead;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         static void EnsurePrototypePlayerStats()
@@ -31,8 +43,18 @@ namespace Sprint0.Prototype
 
         void Awake()
         {
-            CurrentHp = maxHp;
+            localHp = maxHp;
             motor = GetComponent<ThirdPersonCharacterMotor>();
+        }
+
+        public override void OnNetworkSpawn()
+        {
+            base.OnNetworkSpawn();
+            if (IsServer)
+            {
+                networkHp.Value = maxHp;
+                networkDead.Value = false;
+            }
         }
 
         public void TakeDamage(int damage)
@@ -42,12 +64,12 @@ namespace Sprint0.Prototype
 
         public bool TryTakeDamage(int damage)
         {
-            if (IsDead || invincible || damage <= 0)
+            if ((IsSpawned && !IsServer) || IsDead || invincible || damage <= 0)
             {
                 return false;
             }
 
-            CurrentHp = Mathf.Max(0, CurrentHp - damage);
+            SetCurrentHp(Mathf.Max(0, CurrentHp - damage));
             if (CurrentHp <= 0)
             {
                 Die();
@@ -67,11 +89,40 @@ namespace Sprint0.Prototype
 
         void Die()
         {
-            IsDead = true;
+            if (IsSpawned)
+            {
+                networkDead.Value = true;
+            }
+            else
+            {
+                localDead = true;
+            }
             invincible = true;
             if (motor != null)
             {
                 motor.SetControlsEnabled(false);
+            }
+
+            var sharedWarrior = GetComponent<SharedTentacleWarriorNetwork>();
+            if (sharedWarrior != null)
+            {
+                sharedWarrior.DeclareGameOver();
+            }
+            else
+            {
+                GameResultUI.Show(GameResultState.GameOver);
+            }
+        }
+
+        void SetCurrentHp(int value)
+        {
+            if (IsSpawned)
+            {
+                networkHp.Value = value;
+            }
+            else
+            {
+                localHp = value;
             }
         }
 

@@ -1,10 +1,12 @@
+using Unity.Netcode;
 using UnityEngine;
 
 namespace Sprint0.Prototype
 {
     [DisallowMultipleComponent]
     [RequireComponent(typeof(Rigidbody))]
-    public sealed class MonsterContactDamage : MonoBehaviour
+    [RequireComponent(typeof(NetworkObject))]
+    public sealed class MonsterContactDamage : NetworkBehaviour
     {
         [SerializeField, Min(1)] int attackDamage = 1;
         float damageMultiplier = 1f;
@@ -32,6 +34,18 @@ namespace Sprint0.Prototype
             }
         }
 
+        public override void OnNetworkSpawn()
+        {
+            base.OnNetworkSpawn();
+            if (!IsServer)
+            {
+                foreach (var collider in GetComponentsInChildren<Collider>(true))
+                {
+                    collider.enabled = false;
+                }
+            }
+        }
+
         void OnTriggerEnter(Collider other)
         {
             TryDamage(other);
@@ -44,7 +58,7 @@ namespace Sprint0.Prototype
 
         void TryDamage(Collider other)
         {
-            if (consumed)
+            if ((IsSpawned && !IsServer) || consumed)
             {
                 return;
             }
@@ -63,7 +77,14 @@ namespace Sprint0.Prototype
                 {
                     collider.enabled = false;
                 }
-                Destroy(gameObject);
+                if (IsSpawned && NetworkObject != null && NetworkObject.IsSpawned)
+                {
+                    NetworkObject.Despawn(true);
+                }
+                else
+                {
+                    Destroy(gameObject);
+                }
             }
         }
     }

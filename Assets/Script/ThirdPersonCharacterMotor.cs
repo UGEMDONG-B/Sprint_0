@@ -1,4 +1,5 @@
 using UnityEngine;
+using Unity.Netcode;
 #if ENABLE_INPUT_SYSTEM
 using UnityEngine.InputSystem;
 #endif
@@ -8,13 +9,13 @@ namespace Sprint0.Prototype
     [DefaultExecutionOrder(-100)]
     [DisallowMultipleComponent]
     [RequireComponent(typeof(Rigidbody))]
-    public sealed class ThirdPersonCharacterMotor : MonoBehaviour
+    public sealed class ThirdPersonCharacterMotor : NetworkBehaviour
     {
         [Header("References")]
         [SerializeField] Camera movementCamera;
 
         [Header("Movement")]
-        [SerializeField, Min(0f)] float moveSpeed = 4.5f;
+        [SerializeField, Min(0f)] float moveSpeed = 3f;
         [SerializeField, Min(0f)] float rotationSharpness = 12f;
 
         Rigidbody body;
@@ -22,8 +23,11 @@ namespace Sprint0.Prototype
         Vector3 worldMoveDirection;
         float attackLockedUntil;
         bool controlsEnabled = true;
+        bool externalControl;
 
-        public bool IsMoving => controlsEnabled && moveInput.sqrMagnitude > 0.0001f;
+        public bool IsMoving => externalControl
+            ? worldMoveDirection.sqrMagnitude > 0.0001f
+            : controlsEnabled && moveInput.sqrMagnitude > 0.0001f;
         public bool IsAttacking => Time.time < attackLockedUntil;
         public Vector3 MoveDirection => worldMoveDirection;
         public float MoveSpeed => moveSpeed;
@@ -41,6 +45,47 @@ namespace Sprint0.Prototype
                 moveInput = Vector2.zero;
                 worldMoveDirection = Vector3.zero;
             }
+        }
+
+        public void SetExternalControl(bool value)
+        {
+            externalControl = value;
+            controlsEnabled = !value;
+            moveInput = Vector2.zero;
+            worldMoveDirection = Vector3.zero;
+        }
+
+        public void SetExternalMovementState(Vector3 combinedDirection)
+        {
+            if (!externalControl)
+            {
+                return;
+            }
+
+            combinedDirection.y = 0f;
+            worldMoveDirection = combinedDirection;
+        }
+
+        public void ApplyExternalMovement(Vector3 combinedDirection)
+        {
+            if (!externalControl || body == null)
+            {
+                return;
+            }
+
+            SetExternalMovementState(combinedDirection);
+            if (worldMoveDirection.sqrMagnitude <= 0.0001f || IsAttacking)
+            {
+                return;
+            }
+
+            // Do not normalize here. Each tentacle contributes one full movement
+            // vector, so matching directions add speed and opposing vectors cancel.
+            body.MovePosition(body.position + worldMoveDirection * (moveSpeed * Time.fixedDeltaTime));
+
+            var targetRotation = Quaternion.LookRotation(worldMoveDirection.normalized, Vector3.up);
+            var rotationBlend = 1f - Mathf.Exp(-rotationSharpness * Time.fixedDeltaTime);
+            body.MoveRotation(Quaternion.Slerp(body.rotation, targetRotation, rotationBlend));
         }
 
         public void LockMovementForAttack(float duration)
@@ -63,6 +108,18 @@ namespace Sprint0.Prototype
 
         void Update()
         {
+            if (externalControl)
+            {
+                return;
+            }
+
+            if (IsSpawned && !IsOwner)
+            {
+                moveInput = Vector2.zero;
+                worldMoveDirection = Vector3.zero;
+                return;
+            }
+
             moveInput = !controlsEnabled || IsAttacking ? Vector2.zero : ReadNormalizedMoveInput();
 
             if (movementCamera == null)
@@ -73,6 +130,17 @@ namespace Sprint0.Prototype
 
         void FixedUpdate()
         {
+            if (externalControl)
+            {
+                return;
+            }
+
+            if (IsSpawned && !IsOwner)
+            {
+                worldMoveDirection = Vector3.zero;
+                return;
+            }
+
             if (movementCamera == null || !controlsEnabled || IsAttacking)
             {
                 worldMoveDirection = Vector3.zero;

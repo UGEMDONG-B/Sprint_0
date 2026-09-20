@@ -30,6 +30,12 @@ namespace Sprint0.Prototype.Editor
 
         static void AutoInstall()
         {
+            if (PrototypeSceneInstallGuard.IsStep8Installed)
+            {
+                SessionState.SetBool(SessionKey, true);
+                return;
+            }
+
             if (SessionState.GetBool(SessionKey, false))
             {
                 return;

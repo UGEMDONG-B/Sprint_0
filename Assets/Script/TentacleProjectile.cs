@@ -1,11 +1,14 @@
 using System.Collections.Generic;
+using Unity.Netcode;
+using Unity.Netcode.Components;
 using UnityEngine;
 
 namespace Sprint0.Prototype
 {
     [DisallowMultipleComponent]
     [RequireComponent(typeof(Rigidbody), typeof(SphereCollider))]
-    public sealed class TentacleProjectile : MonoBehaviour
+    [RequireComponent(typeof(NetworkObject), typeof(NetworkTransform))]
+    public sealed class TentacleProjectile : NetworkBehaviour
     {
         [SerializeField, Min(1)] int damage = 1;
         [SerializeField, Min(0.1f)] float lifetime = 12f;
@@ -27,6 +30,7 @@ namespace Sprint0.Prototype
         int monsterMask;
         int piercedTargets;
         bool consumed;
+        Coroutine lifetimeRoutine;
 
         public void SetDamage(int value) => damage = Mathf.Max(1, value);
 
@@ -53,6 +57,20 @@ namespace Sprint0.Prototype
             monsterMask = LayerMask.GetMask("Monster");
         }
 
+        public override void OnNetworkSpawn()
+        {
+            base.OnNetworkSpawn();
+            if (!IsServer)
+            {
+                body.linearVelocity = Vector3.zero;
+                body.isKinematic = true;
+                foreach (var collider in projectileColliders)
+                {
+                    collider.enabled = false;
+                }
+            }
+        }
+
         public void Launch(Vector3 direction, float speed, Transform owner)
         {
             ownerRoot = owner != null ? owner.root : null;
@@ -70,11 +88,19 @@ namespace Sprint0.Prototype
                 }
             }
 
-            Destroy(gameObject, Mathf.Max(lifetime, 12f));
+            if (!IsSpawned || IsServer)
+            {
+                lifetimeRoutine = StartCoroutine(ExpireAfterDelay(Mathf.Max(lifetime, 12f)));
+            }
         }
 
         void FixedUpdate()
         {
+            if (IsSpawned && !IsServer)
+            {
+                return;
+            }
+
             if (consumed || monsterMask == 0)
             {
                 previousPosition = body.position;
@@ -98,7 +124,13 @@ namespace Sprint0.Prototype
             previousPosition = body.position;
         }
 
-        void OnTriggerEnter(Collider other) => ResolveHit(other);
+        void OnTriggerEnter(Collider other)
+        {
+            if (!IsSpawned || IsServer)
+            {
+                ResolveHit(other);
+            }
+        }
 
         void ResolveHit(Collider other)
         {
@@ -186,6 +218,32 @@ namespace Sprint0.Prototype
         void Consume()
         {
             consumed = true;
+            RemoveFromWorld();
+        }
+
+        System.Collections.IEnumerator ExpireAfterDelay(float delay)
+        {
+            yield return new WaitForSeconds(delay);
+            RemoveFromWorld();
+        }
+
+        void RemoveFromWorld()
+        {
+            if (lifetimeRoutine != null)
+            {
+                StopCoroutine(lifetimeRoutine);
+                lifetimeRoutine = null;
+            }
+
+            if (IsSpawned && NetworkObject != null && NetworkObject.IsSpawned)
+            {
+                if (IsServer)
+                {
+                    NetworkObject.Despawn(true);
+                }
+                return;
+            }
+
             Destroy(gameObject);
         }
 

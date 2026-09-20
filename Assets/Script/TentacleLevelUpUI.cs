@@ -28,7 +28,6 @@ namespace Sprint0.Prototype
         UnityEngine.UI.Button[] buttons;
         UnityEngine.UI.Text[] buttonLabels;
         TentacleProgression displayedProgression;
-        float previousTimeScale = 1f;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         static void EnsureHud()
@@ -101,11 +100,14 @@ namespace Sprint0.Prototype
                 : Mathf.Clamp01((float)progression.Experience / progression.ExperienceToNextLevel);
         }
 
+        public void SetDisplayedProgression(TentacleProgression progression)
+        {
+            displayedProgression = progression;
+        }
+
         public void ShowChoices(TentacleProgression progression, bool evolutionChoice)
         {
             BuildIfNeeded();
-            previousTimeScale = Time.timeScale;
-            Time.timeScale = 0f;
             overlay.SetActive(true);
             title.text = evolutionChoice
                 ? $"레벨 {progression.Level} · 촉수 진화 선택"
@@ -148,7 +150,6 @@ namespace Sprint0.Prototype
         void Close()
         {
             overlay.SetActive(false);
-            Time.timeScale = previousTimeScale <= 0f ? 1f : previousTimeScale;
         }
 
         void SetButton(int index, string label, UnityEngine.Events.UnityAction action)

@@ -78,6 +78,13 @@ namespace Sprint0.Editor
                 return;
             }
 
+            // This helper belongs to the optional sample scene. Projects that only
+            // import the networking scripts do not necessarily contain that scene.
+            if (!File.Exists(ScenePath))
+            {
+                return;
+            }
+
             BuildScene();
         }
 
@@ -195,7 +202,7 @@ namespace Sprint0.Editor
             RenderSettings.ambientLight = new Color(0.22f, 0.26f, 0.30f);
         }
 
-        static void BuildEventSystem()
+        public static void BuildEventSystem()
         {
             var eventSystemObject = new GameObject("EventSystem");
             eventSystemObject.AddComponent<EventSystem>();
@@ -203,7 +210,7 @@ namespace Sprint0.Editor
             inputModule.AssignDefaultActions();
         }
 
-        static NetworkManager BuildNetworkManager(GameObject playerPrefab)
+        public static NetworkManager BuildNetworkManager(GameObject playerPrefab)
         {
             var managerObject = new GameObject("NetworkManager");
             var transport = managerObject.AddComponent<UnityTransport>();
@@ -215,7 +222,7 @@ namespace Sprint0.Editor
             return networkManager;
         }
 
-        static void BuildInterface(NetworkManager networkManager)
+        public static void BuildInterface(NetworkManager networkManager)
         {
             var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 

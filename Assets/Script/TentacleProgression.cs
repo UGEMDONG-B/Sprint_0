@@ -1,3 +1,4 @@
+using Unity.Netcode;
 using UnityEngine;
 
 namespace Sprint0.Prototype
@@ -19,7 +20,7 @@ namespace Sprint0.Prototype
     }
 
     [DisallowMultipleComponent]
-    public sealed class TentacleProgression : MonoBehaviour
+    public sealed class TentacleProgression : NetworkBehaviour
     {
         const string StandardProjectilePath = "Assets/Art/Prefab/Attack_Standard.prefab";
         const string FireProjectilePath = "Assets/Art/Prefab/Attack_Fire.prefab";
@@ -51,16 +52,39 @@ namespace Sprint0.Prototype
         [SerializeField, Min(0f)] float moveSpeedBonus;
         [SerializeField] TentacleEvolution evolution;
 
-        bool choicePending;
+        readonly NetworkVariable<int> networkLevel = new(1);
+        readonly NetworkVariable<int> networkExperience = new(0);
+        readonly NetworkVariable<int> networkAttackDamage = new(1);
+        readonly NetworkVariable<float> networkAttackCooldown = new(0.5f);
+        readonly NetworkVariable<float> networkProjectileScale = new(1f);
+        readonly NetworkVariable<float> networkMoveSpeedBonus = new(0f);
+        readonly NetworkVariable<TentacleEvolution> networkEvolution = new(TentacleEvolution.None);
+        readonly NetworkVariable<bool> networkChoicePending = new(false);
 
-        public int Level => level;
-        public int Experience => experience;
+        bool localChoicePending;
+        bool choiceUiShown;
+        TentacleEvolution appliedVisualEvolution;
+
+        public int Level => IsSpawned ? networkLevel.Value : level;
+        public int Experience => IsSpawned ? networkExperience.Value : experience;
         public int ExperienceToNextLevel => experiencePerLevel;
-        public int AttackDamage => attackDamage;
-        public float AttackCooldown => attackCooldown;
-        public float ProjectileScaleMultiplier => projectileScaleMultiplier;
-        public TentacleEvolution Evolution => evolution;
-        public GameObject CurrentProjectilePrefab => evolution switch
+        public int AttackDamage => IsSpawned ? networkAttackDamage.Value : attackDamage;
+        public float AttackCooldown => IsSpawned ? networkAttackCooldown.Value : attackCooldown;
+        public float ProjectileScaleMultiplier => IsSpawned
+            ? networkProjectileScale.Value
+            : projectileScaleMultiplier;
+        public TentacleEvolution Evolution => IsSpawned ? networkEvolution.Value : evolution;
+        public bool ChoicePending => IsSpawned ? networkChoicePending.Value : localChoicePending;
+        public bool IsLocallyControlled
+        {
+            get
+            {
+                var shared = GetComponentInParent<SharedTentacleWarriorNetwork>();
+                return shared != null && shared.LocalSlot == shared.GetTentacleSlot(tentacle);
+            }
+        }
+
+        public GameObject CurrentProjectilePrefab => Evolution switch
         {
             TentacleEvolution.Fire => fireProjectilePrefab != null ? fireProjectilePrefab : standardProjectilePrefab,
             TentacleEvolution.Pierce => pierceProjectilePrefab != null ? pierceProjectilePrefab : standardProjectilePrefab,
@@ -118,28 +142,96 @@ namespace Sprint0.Prototype
                 : transform.root.GetComponent<ThirdPersonCharacterMotor>();
         }
 
+        public override void OnNetworkSpawn()
+        {
+            base.OnNetworkSpawn();
+            networkEvolution.OnValueChanged += OnEvolutionChanged;
+            networkChoicePending.OnValueChanged += OnChoicePendingChanged;
+
+            if (IsServer)
+            {
+                networkLevel.Value = level;
+                networkExperience.Value = experience;
+                networkAttackDamage.Value = attackDamage;
+                networkAttackCooldown.Value = attackCooldown;
+                networkProjectileScale.Value = projectileScaleMultiplier;
+                networkMoveSpeedBonus.Value = moveSpeedBonus;
+                networkEvolution.Value = evolution;
+                networkChoicePending.Value = false;
+            }
+
+            ApplyEvolutionVisual(networkEvolution.Value);
+        }
+
+        public override void OnNetworkDespawn()
+        {
+            networkEvolution.OnValueChanged -= OnEvolutionChanged;
+            networkChoicePending.OnValueChanged -= OnChoicePendingChanged;
+            base.OnNetworkDespawn();
+        }
+
+        void Update()
+        {
+            if (ChoicePending && !choiceUiShown && IsLocallyControlled)
+            {
+                choiceUiShown = true;
+                TentacleLevelUpUI.EnsureInstance().ShowChoices(this, Level == 5);
+            }
+            else if (!ChoicePending)
+            {
+                choiceUiShown = false;
+            }
+        }
+
         public void AddExperience(int amount)
         {
-            if (level >= 10 || choicePending || amount <= 0)
+            if ((IsSpawned && !IsServer) || Level >= 10 || ChoicePending || amount <= 0)
             {
                 return;
             }
 
-            experience += amount;
-            if (experience < experiencePerLevel)
+            var nextExperience = Experience + amount;
+            if (nextExperience < experiencePerLevel)
             {
+                SetExperience(nextExperience);
                 return;
             }
 
-            experience -= experiencePerLevel;
-            level++;
-            choicePending = true;
-            TentacleLevelUpUI.EnsureInstance().ShowChoices(this, level == 5);
+            SetExperience(nextExperience - experiencePerLevel);
+            SetLevel(Level + 1);
+            SetChoicePending(true);
+
+            if (!IsSpawned)
+            {
+                TentacleLevelUpUI.EnsureInstance().ShowChoices(this, Level == 5);
+            }
         }
 
         public void ApplyStatUpgrade(TentacleStatUpgrade upgrade)
         {
-            if (!choicePending)
+            if (IsSpawned)
+            {
+                RequestStatUpgradeServerRpc(upgrade);
+                return;
+            }
+
+            ApplyStatUpgradeInternal(upgrade);
+        }
+
+        [Rpc(SendTo.Server)]
+        void RequestStatUpgradeServerRpc(
+            TentacleStatUpgrade upgrade,
+            RpcParams rpcParams = default)
+        {
+            if (IsAuthorized(rpcParams.Receive.SenderClientId))
+            {
+                ApplyStatUpgradeInternal(upgrade);
+            }
+        }
+
+        void ApplyStatUpgradeInternal(TentacleStatUpgrade upgrade)
+        {
+            if (!ChoicePending || Level == 5)
             {
                 return;
             }
@@ -147,31 +239,102 @@ namespace Sprint0.Prototype
             switch (upgrade)
             {
                 case TentacleStatUpgrade.AttackDamage:
-                    attackDamage++;
+                    SetAttackDamage(AttackDamage + 1);
                     break;
                 case TentacleStatUpgrade.AttackSpeed:
-                    attackCooldown = Mathf.Max(0.1f, attackCooldown * 0.82f);
+                    SetAttackCooldown(Mathf.Max(0.1f, AttackCooldown * 0.82f));
                     break;
                 case TentacleStatUpgrade.ProjectileSize:
-                    projectileScaleMultiplier *= 1.25f;
+                    SetProjectileScale(ProjectileScaleMultiplier * 1.25f);
                     break;
                 case TentacleStatUpgrade.MoveSpeed:
-                    moveSpeedBonus += 0.6f;
+                    SetMoveSpeedBonus(CurrentMoveSpeedBonus() + 0.6f);
                     characterMotor?.AddMoveSpeed(0.6f);
                     break;
+                default:
+                    return;
             }
 
-            choicePending = false;
+            SetChoicePending(false);
         }
 
         public void SelectEvolution(TentacleEvolution selectedEvolution)
         {
-            if (!choicePending || level != 5 || selectedEvolution == TentacleEvolution.None)
+            if (IsSpawned)
+            {
+                RequestEvolutionServerRpc(selectedEvolution);
+                return;
+            }
+
+            SelectEvolutionInternal(selectedEvolution);
+        }
+
+        [Rpc(SendTo.Server)]
+        void RequestEvolutionServerRpc(
+            TentacleEvolution selectedEvolution,
+            RpcParams rpcParams = default)
+        {
+            if (IsAuthorized(rpcParams.Receive.SenderClientId))
+            {
+                SelectEvolutionInternal(selectedEvolution);
+            }
+        }
+
+        void SelectEvolutionInternal(TentacleEvolution selectedEvolution)
+        {
+            if (!ChoicePending || Level != 5 || selectedEvolution == TentacleEvolution.None)
             {
                 return;
             }
 
-            evolution = selectedEvolution;
+            if (selectedEvolution != TentacleEvolution.Fire
+                && selectedEvolution != TentacleEvolution.Pierce
+                && selectedEvolution != TentacleEvolution.Strike)
+            {
+                return;
+            }
+
+            if (IsSpawned)
+            {
+                networkEvolution.Value = selectedEvolution;
+            }
+            else
+            {
+                evolution = selectedEvolution;
+                ApplyEvolutionVisual(selectedEvolution);
+            }
+
+            SetChoicePending(false);
+        }
+
+        bool IsAuthorized(ulong clientId)
+        {
+            var shared = GetComponentInParent<SharedTentacleWarriorNetwork>();
+            var slot = shared != null ? shared.GetTentacleSlot(tentacle) : -1;
+            return shared != null && shared.IsClientAssignedToSlot(clientId, slot);
+        }
+
+        void OnEvolutionChanged(TentacleEvolution previous, TentacleEvolution current)
+        {
+            ApplyEvolutionVisual(current);
+        }
+
+        void OnChoicePendingChanged(bool previous, bool current)
+        {
+            if (!current)
+            {
+                choiceUiShown = false;
+            }
+        }
+
+        void ApplyEvolutionVisual(TentacleEvolution selectedEvolution)
+        {
+            if (selectedEvolution == TentacleEvolution.None
+                || selectedEvolution == appliedVisualEvolution)
+            {
+                return;
+            }
+
             var visual = selectedEvolution switch
             {
                 TentacleEvolution.Fire => fireVisualPrefab,
@@ -182,9 +345,55 @@ namespace Sprint0.Prototype
             if (visual != null)
             {
                 tentacle?.ReplaceVisual(visual);
+                appliedVisualEvolution = selectedEvolution;
             }
+        }
 
-            choicePending = false;
+        float CurrentMoveSpeedBonus()
+        {
+            return IsSpawned ? networkMoveSpeedBonus.Value : moveSpeedBonus;
+        }
+
+        void SetLevel(int value)
+        {
+            if (IsSpawned) networkLevel.Value = value;
+            else level = value;
+        }
+
+        void SetExperience(int value)
+        {
+            if (IsSpawned) networkExperience.Value = value;
+            else experience = value;
+        }
+
+        void SetAttackDamage(int value)
+        {
+            if (IsSpawned) networkAttackDamage.Value = value;
+            else attackDamage = value;
+        }
+
+        void SetAttackCooldown(float value)
+        {
+            if (IsSpawned) networkAttackCooldown.Value = value;
+            else attackCooldown = value;
+        }
+
+        void SetProjectileScale(float value)
+        {
+            if (IsSpawned) networkProjectileScale.Value = value;
+            else projectileScaleMultiplier = value;
+        }
+
+        void SetMoveSpeedBonus(float value)
+        {
+            if (IsSpawned) networkMoveSpeedBonus.Value = value;
+            else moveSpeedBonus = value;
+        }
+
+        void SetChoicePending(bool value)
+        {
+            if (IsSpawned) networkChoicePending.Value = value;
+            else localChoicePending = value;
         }
     }
 }

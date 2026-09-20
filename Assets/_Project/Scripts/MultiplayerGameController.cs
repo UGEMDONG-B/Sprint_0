@@ -406,7 +406,7 @@ namespace Sprint0.Multiplayer
             }
         }
 
-        async void LeaveSession()
+        public async void LeaveSession()
         {
             if (activeSession == null || isBusy)
             {

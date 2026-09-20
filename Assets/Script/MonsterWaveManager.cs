@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using Unity.Netcode;
 using UnityEngine;
 
 namespace Sprint0.Prototype
@@ -68,7 +69,19 @@ namespace Sprint0.Prototype
             }
 
             EnsureSpawnPoints();
-            if (isActiveAndEnabled && spawnRoutine == null)
+            if (HasServerAuthority() && isActiveAndEnabled && spawnRoutine == null)
+            {
+                spawnRoutine = StartCoroutine(SpawnLoop());
+            }
+        }
+
+        public void SetPlayerTarget(Transform target)
+        {
+            playerTarget = target;
+            EnsureSpawnPoints();
+
+            if (HasServerAuthority() && monsterPrefab != null && playerTarget != null
+                && isActiveAndEnabled && spawnRoutine == null)
             {
                 spawnRoutine = StartCoroutine(SpawnLoop());
             }
@@ -76,6 +89,12 @@ namespace Sprint0.Prototype
 
         void Start()
         {
+            if (!HasServerAuthority())
+            {
+                enabled = false;
+                return;
+            }
+
             if (playerTarget == null)
             {
                 var player = FindFirstObjectByType<ThirdPersonCharacterMotor>();
@@ -134,6 +153,28 @@ namespace Sprint0.Prototype
 
         bool AreAllTentaclesReadyForBoss()
         {
+            var sharedWarrior = FindFirstObjectByType<SharedTentacleWarriorNetwork>();
+            if (sharedWarrior != null)
+            {
+                var activeCount = 0;
+                for (var slot = 0; slot < SharedTentacleWarriorNetwork.TentacleCount; slot++)
+                {
+                    if (!sharedWarrior.IsSlotOccupied(slot))
+                    {
+                        continue;
+                    }
+
+                    activeCount++;
+                    var progression = sharedWarrior.GetTentacle(slot)?.GetComponent<TentacleProgression>();
+                    if (progression == null || progression.Level < 5)
+                    {
+                        return false;
+                    }
+                }
+
+                return activeCount > 0;
+            }
+
             var progressions = FindObjectsByType<TentacleProgression>(FindObjectsSortMode.None);
             if (progressions.Length == 0)
             {
@@ -170,6 +211,7 @@ namespace Sprint0.Prototype
             bossInstance.name = "Step7_Boss";
             SetLayerRecursively(bossInstance, LayerMask.NameToLayer("Monster"));
             bossInstance.GetComponent<MonsterChaseController>()?.Initialize(playerTarget);
+            SpawnNetworkObject(bossInstance);
         }
 
         void SpawnMonster()
@@ -208,7 +250,24 @@ namespace Sprint0.Prototype
             }
 
             chase.Initialize(playerTarget);
+            SpawnNetworkObject(instance);
             aliveMonsters.Add(instance);
+        }
+
+        static bool HasServerAuthority()
+        {
+            var manager = NetworkManager.Singleton;
+            return manager == null || !manager.IsListening || manager.IsServer;
+        }
+
+        static void SpawnNetworkObject(GameObject instance)
+        {
+            var networkObject = instance.GetComponent<NetworkObject>();
+            if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening
+                && NetworkManager.Singleton.IsServer && networkObject != null)
+            {
+                networkObject.Spawn(true);
+            }
         }
 
         void EnsureSpawnPoints()

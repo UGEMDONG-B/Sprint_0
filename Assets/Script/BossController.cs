@@ -1,10 +1,12 @@
+using Unity.Netcode;
 using UnityEngine;
 
 namespace Sprint0.Prototype
 {
     [DisallowMultipleComponent]
     [RequireComponent(typeof(MonsterHealth), typeof(MonsterChaseController), typeof(MonsterContactDamage))]
-    public sealed class BossController : MonoBehaviour
+    [RequireComponent(typeof(NetworkObject))]
+    public sealed class BossController : NetworkBehaviour
     {
         [SerializeField, Range(0.05f, 0.95f)] float enrageThreshold = 0.5f;
         [SerializeField, Min(1f)] float enrageMultiplier = 1.2f;
@@ -12,9 +14,15 @@ namespace Sprint0.Prototype
         MonsterHealth health;
         MonsterChaseController chase;
         MonsterContactDamage contactDamage;
+        readonly NetworkVariable<bool> networkEnraged = new(
+            false,
+            NetworkVariableReadPermission.Everyone,
+            NetworkVariableWritePermission.Server);
+        bool localEnraged;
+        bool visualEnrageApplied;
 
         public MonsterHealth Health => health;
-        public bool IsEnraged { get; private set; }
+        public bool IsEnraged => IsSpawned ? networkEnraged.Value : localEnraged;
 
         void Awake()
         {
@@ -23,9 +31,28 @@ namespace Sprint0.Prototype
             contactDamage = GetComponent<MonsterContactDamage>();
         }
 
+        public override void OnNetworkSpawn()
+        {
+            base.OnNetworkSpawn();
+            networkEnraged.OnValueChanged += OnEnragedChanged;
+            if (networkEnraged.Value)
+            {
+                ApplyEnrageVisual();
+            }
+        }
+
+        public override void OnNetworkDespawn()
+        {
+            networkEnraged.OnValueChanged -= OnEnragedChanged;
+            base.OnNetworkDespawn();
+        }
+
         void Update()
         {
-            EvaluatePhase();
+            if (!IsSpawned || IsServer)
+            {
+                EvaluatePhase();
+            }
         }
 
         public void EvaluatePhase()
@@ -35,9 +62,35 @@ namespace Sprint0.Prototype
                 return;
             }
 
-            IsEnraged = true;
+            if (IsSpawned)
+            {
+                networkEnraged.Value = true;
+            }
+            else
+            {
+                localEnraged = true;
+            }
             chase?.SetSpeedMultiplier(enrageMultiplier);
             contactDamage?.SetDamageMultiplier(enrageMultiplier);
+            ApplyEnrageVisual();
+        }
+
+        void OnEnragedChanged(bool previous, bool current)
+        {
+            if (current)
+            {
+                ApplyEnrageVisual();
+            }
+        }
+
+        void ApplyEnrageVisual()
+        {
+            if (visualEnrageApplied)
+            {
+                return;
+            }
+
+            visualEnrageApplied = true;
             TintRed();
         }
 
