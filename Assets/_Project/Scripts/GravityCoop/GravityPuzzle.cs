@@ -23,6 +23,18 @@ namespace Sprint0.GravityCoop
         [Min(0)] public float laserOnTime = 2.6f;
         public bool timedHazards;
         public bool boxesTriggerHazards;
+        public GravityRotor[] rotors = System.Array.Empty<GravityRotor>();
+        public GravityClamp[] clamps = System.Array.Empty<GravityClamp>();
+        public BoxCollider transferGate;
+        public int transferPlateMask = 1;
+        public bool clampCheckpoint;
+        public TextMesh checkpointLabel;
+        public NetworkVariable<bool> TransferOpen = new();
+        public NetworkVariable<bool> CheckpointSaved = new();
+        int checkpointBox = -1;
+        GravityClamp checkpointClamp;
+        Vector3 checkpointPosition;
+        Quaternion checkpointRotation;
         public NetworkVariable<int> Pressed = new();
         public NetworkVariable<bool> LeverOn = new();
         public NetworkVariable<bool> DoorOpen = new();
@@ -64,13 +76,41 @@ namespace Sprint0.GravityCoop
             gate.GetComponent<Renderer>().enabled = !open;
         }
 
-        public void Restore()
+        public void SaveClampCheckpoint(GravityClamp clamp, int boxIndex)
+        {
+            if (!IsServer || !clampCheckpoint || CheckpointSaved.Value) return;
+            checkpointBox = boxIndex;
+            checkpointClamp = clamp;
+            checkpointPosition = boxes[boxIndex].Body.position;
+            checkpointRotation = boxes[boxIndex].Body.rotation;
+            CheckpointSaved.Value = true;
+        }
+
+        public void Restore(bool fromStart = false)
         {
             foreach (var box in boxes) box.Restore();
+            foreach (var rotor in rotors) rotor.Restore();
+            foreach (var clamp in clamps) clamp.Restore();
+            if (fromStart)
+            {
+                CheckpointSaved.Value = false;
+                checkpointBox = -1;
+                checkpointClamp = null;
+            }
+            if (CheckpointSaved.Value && checkpointBox >= 0 && checkpointClamp != null)
+            {
+                var box = boxes[checkpointBox];
+                box.Body.position = checkpointPosition;
+                box.Body.rotation = checkpointRotation;
+                box.SetAnchored(true);
+                box.GetComponent<Unity.Netcode.Components.NetworkTransform>().Teleport(checkpointPosition, checkpointRotation, box.transform.localScale);
+                checkpointClamp.LockedBox.Value = checkpointBox;
+            }
             Pressed.Value = 0;
             LeverOn.Value = false;
             DoorOpen.Value = false;
             RouteBlocked.Value = false;
+            TransferOpen.Value = false;
             ApplyRoutes();
         }
 
@@ -100,6 +140,8 @@ namespace Sprint0.GravityCoop
                 if (occupied) pressed |= 1 << i;
             }
             Pressed.Value = pressed;
+            if (transferGate != null)
+                TransferOpen.Value = (pressed & transferPlateMask) == transferPlateMask || Occupied(transferGate);
             DoorOpen.Value = ConditionsMet;
             LaserOn.Value = hazards.Length > 0 && (!timedHazards || (game.NetworkManager.ServerTime.Time - game.SectionStarted.Value) % Mathf.Max(0.1f, laserPeriod) < laserOnTime);
             if (LaserOn.Value)
@@ -116,6 +158,12 @@ namespace Sprint0.GravityCoop
         void Update()
         {
             ApplyRoutes();
+            SetGate(transferGate, TransferOpen.Value);
+            if (checkpointLabel != null)
+            {
+                checkpointLabel.text = CheckpointSaved.Value ? "P SAVED / R RETRY\nSHIFT+R / RESTART" : "LOCK P / CHECKPOINT";
+                checkpointLabel.color = CheckpointSaved.Value ? Color.green : Color.white;
+            }
             if (door != null)
             {
                 door.enabled = !DoorOpen.Value;

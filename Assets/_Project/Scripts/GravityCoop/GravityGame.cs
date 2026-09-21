@@ -1,6 +1,7 @@
 using Unity.Netcode;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.Rendering;
 
 namespace Sprint0.GravityCoop
 {
@@ -39,15 +40,28 @@ namespace Sprint0.GravityCoop
         Renderer[] runnerRenderers;
         float runnerLookYaw;
         bool hasRunnerLook;
+        Camera observerCamera;
+        public Camera ObserverCamera => observerCamera;
+        public bool IsSolo => Sprint0.Multiplayer.MultiplayerGameController.Instance != null
+            && Sprint0.Multiplayer.MultiplayerGameController.Instance.IsSoloMode;
 
         public override void OnNetworkSpawn()
         {
             runnerRenderers = runner.visual.GetComponentsInChildren<Renderer>(true);
             foreach (var renderer in runnerRenderers) renderer.forceRenderingOff = !IsOperator;
+            if (IsSolo)
+            {
+                observerCamera = new GameObject("Solo operator camera").AddComponent<Camera>();
+                observerCamera.CopyFrom(Camera.main);
+                observerCamera.depth = Camera.main.depth - 1;
+                observerCamera.rect = new Rect(0, 0, 0.5f, 1);
+                RenderPipelineManager.beginCameraRendering += BeforeCameraRender;
+            }
         }
 
         public override void OnNetworkDespawn()
         {
+            CleanupSoloCamera();
             if (runnerRenderers != null)
                 foreach (var renderer in runnerRenderers)
                     if (renderer != null) renderer.forceRenderingOff = false;
@@ -55,7 +69,7 @@ namespace Sprint0.GravityCoop
         }
         public Vector3 Down => DirectionVector(Direction.Value);
         public bool Playing => IsSpawned && Ready.Value && !Dead.Value && !Finished.Value;
-        public bool IsOperator => IsSpawned && NetworkManager.LocalClientId == Unity.Netcode.NetworkManager.ServerClientId;
+        public bool IsOperator => !IsSolo && IsSpawned && NetworkManager.LocalClientId == Unity.Netcode.NetworkManager.ServerClientId;
         public GravityPuzzle Current => puzzles[Mathf.Clamp(Puzzle.Value, 0, puzzles.Length - 1)];
 
         public static Vector3 DirectionVector(GravityDirection direction) => direction switch
@@ -69,9 +83,23 @@ namespace Sprint0.GravityCoop
         void Awake() { Instance = this; }
         public override void OnDestroy()
         {
+            CleanupSoloCamera();
             if (!IsOperator) ReleaseCursor();
             if (Instance == this) Instance = null;
             base.OnDestroy();
+        }
+
+        void BeforeCameraRender(ScriptableRenderContext context, Camera camera)
+        {
+            foreach (var renderer in runnerRenderers)
+                if (renderer != null) renderer.forceRenderingOff = camera != observerCamera;
+        }
+
+        void CleanupSoloCamera()
+        {
+            RenderPipelineManager.beginCameraRendering -= BeforeCameraRender;
+            if (observerCamera != null) Destroy(observerCamera.gameObject);
+            observerCamera = null;
         }
 
         public bool IsHeld(GravityBody box) => HeldBox.Value >= 0 && HeldBox.Value < Current.boxes.Length && Current.boxes[HeldBox.Value] == box;
@@ -82,7 +110,7 @@ namespace Sprint0.GravityCoop
             if (IsServer)
             {
                 var flow = Sprint0.Multiplayer.MultiplayerGameController.Instance;
-                bool pair = NetworkManager.ConnectedClientsIds.Count == 2 && (flow == null || flow.HasGameStarted);
+                bool pair = (IsSolo || NetworkManager.ConnectedClientsIds.Count == 2) && (flow == null || flow.HasGameStarted);
                 if (pair != Ready.Value)
                 {
                     Ready.Value = pair;
@@ -100,16 +128,16 @@ namespace Sprint0.GravityCoop
                 return;
             }
             if (!IsOperator) UpdateCameraInput(keyboard);
-            if (keyboard.rKey.wasPressedThisFrame) ResetRpc();
+            if (keyboard.rKey.wasPressedThisFrame) ResetRpc(keyboard.leftShiftKey.isPressed || keyboard.rightShiftKey.isPressed);
             if (!Playing) return;
-            if (IsOperator)
+            if (IsOperator || IsSolo)
             {
                 if (keyboard.downArrowKey.wasPressedThisFrame) ChangeGravityRpc(GravityDirection.Down);
                 if (keyboard.upArrowKey.wasPressedThisFrame) ChangeGravityRpc(GravityDirection.Up);
                 if (keyboard.leftArrowKey.wasPressedThisFrame) ChangeGravityRpc(GravityDirection.Left);
                 if (keyboard.rightArrowKey.wasPressedThisFrame) ChangeGravityRpc(GravityDirection.Right);
             }
-            else
+            if (!IsOperator)
             {
                 Vector2 move = new((keyboard.dKey.isPressed ? 1 : 0) - (keyboard.aKey.isPressed ? 1 : 0),
                     (keyboard.wKey.isPressed ? 1 : 0) - (keyboard.sKey.isPressed ? 1 : 0));
@@ -167,7 +195,8 @@ namespace Sprint0.GravityCoop
             cameraPitch = Mathf.Clamp(cameraPitch - delta.y * mouseSensitivity, pitchLimits.x, pitchLimits.y);
         }
 
-        bool IsRunner(ulong sender) => sender != Unity.Netcode.NetworkManager.ServerClientId && NetworkManager.ConnectedClients.ContainsKey(sender);
+        bool IsRunner(ulong sender) => NetworkManager.ConnectedClients.ContainsKey(sender)
+            && (sender != Unity.Netcode.NetworkManager.ServerClientId || IsSolo);
 
         [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
         public void ChangeGravityRpc(GravityDirection direction, RpcParams rpc = default)
@@ -193,9 +222,9 @@ namespace Sprint0.GravityCoop
         }
 
         [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
-        public void ResetRpc(RpcParams rpc = default)
+        public void ResetRpc(bool fromStart = false, RpcParams rpc = default)
         {
-            if (NetworkManager.ConnectedClients.ContainsKey(rpc.Receive.SenderClientId)) ResetSection();
+            if (NetworkManager.ConnectedClients.ContainsKey(rpc.Receive.SenderClientId)) ResetSection(fromStart);
         }
 
         bool Reachable(Collider target, out float distance)
@@ -218,10 +247,27 @@ namespace Sprint0.GravityCoop
             float distance = interactionDistance;
             bool useLever = Current.lever != null && Reachable(Current.lever.GetComponent<Collider>(), out distance);
             if (!useLever) distance = interactionDistance;
+            GravityRotor rotorTarget = null;
+            GravityClamp clampTarget = null;
+            foreach (var rotor in Current.rotors)
+                if (Reachable(rotor.handle, out float candidate) && candidate < distance)
+                {
+                    rotorTarget = rotor;
+                    distance = candidate;
+                    useLever = false;
+                }
+            foreach (var clamp in Current.clamps)
+                if (Reachable(clamp.handle, out float candidate) && candidate < distance)
+                {
+                    clampTarget = clamp;
+                    rotorTarget = null;
+                    distance = candidate;
+                    useLever = false;
+                }
             for (int i = 0; i < Current.boxes.Length; i++)
             {
                 var box = Current.boxes[i];
-                if (box.carryable && Reachable(box.GetComponent<Collider>(), out float candidate) && candidate <= distance)
+                if (box.carryable && !box.Anchored.Value && Reachable(box.GetComponent<Collider>(), out float candidate) && candidate <= distance)
                 {
                     closest = i;
                     distance = candidate;
@@ -235,6 +281,8 @@ namespace Sprint0.GravityCoop
                 box.Body.isKinematic = true;
                 Physics.IgnoreCollision(runner.GetComponent<Collider>(), box.GetComponent<Collider>(), true);
             }
+            else if (clampTarget != null) clampTarget.TryToggle();
+            else if (rotorTarget != null) rotorTarget.TryTurn();
             else if (useLever) Current.TryToggleRoute();
         }
 
@@ -294,7 +342,7 @@ namespace Sprint0.GravityCoop
             respawnAt = NetworkManager.ServerTime.Time + respawnDelay;
         }
 
-        public void ResetSection()
+        public void ResetSection(bool fromStart = false)
         {
             if (!IsServer) return;
             Drop();
@@ -305,7 +353,7 @@ namespace Sprint0.GravityCoop
             Dead.Value = false;
             Finished.Value = false;
             ResetCount.Value++;
-            Current.Restore();
+            Current.Restore(fromStart);
             runner.Restore(Current.spawn.position);
             Physics.SyncTransforms();
         }
@@ -323,13 +371,12 @@ namespace Sprint0.GravityCoop
         {
             if (!IsSpawned || Camera.main == null) return;
             var camera = Camera.main;
-            camera.rect = new Rect(0, 0, 1, 1);
+            camera.rect = IsSolo ? new Rect(0.5f, 0, 0.5f, 1) : new Rect(0, 0, 1, 1);
+            camera.aspect = camera.pixelWidth / (float)Mathf.Max(1, camera.pixelHeight);
+            if (observerCamera != null) PositionObserver(observerCamera);
             if (IsOperator)
             {
-                camera.orthographic = true;
-                camera.orthographicSize = Mathf.Max(10.5f, 14f / camera.aspect);
-                camera.transform.SetPositionAndRotation(Current.transform.position + new Vector3(0, 8 + observerElevation, -35),
-                    Quaternion.LookRotation(new Vector3(0, -observerElevation, 35), Vector3.up));
+                PositionObserver(camera);
             }
             else
             {
@@ -344,6 +391,15 @@ namespace Sprint0.GravityCoop
                 var eye = runner.transform.position + gravityCameraFrame * Vector3.up * Mathf.Clamp(eyeHeight, 0, 0.3f);
                 camera.transform.SetPositionAndRotation(eye, rotation);
             }
+        }
+
+        void PositionObserver(Camera camera)
+        {
+            camera.orthographic = true;
+            camera.aspect = camera.pixelWidth / (float)Mathf.Max(1, camera.pixelHeight);
+            camera.orthographicSize = Mathf.Max(10.5f, 14f / camera.aspect);
+            camera.transform.SetPositionAndRotation(Current.transform.position + new Vector3(0, 8 + observerElevation, -35),
+                Quaternion.LookRotation(new Vector3(0, -observerElevation, 35), Vector3.up));
         }
     }
 }

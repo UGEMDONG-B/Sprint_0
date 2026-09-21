@@ -11,11 +11,11 @@ using UnityEngine.SceneManagement;
 
 namespace Sprint0.Editor
 {
-    public static class GravityPrototypeBuilder
+    public static partial class GravityPrototypeBuilder
     {
         public const string ScenePath = "Assets/Scenes/GravityPrototype.unity";
         const string Materials = "Assets/_Project/Materials/Gravity";
-        const int PuzzleCount = 8;
+        const int PuzzleCount = 12;
 
         [MenuItem("Tools/Sprint 0/Build Gravity Prototype")]
         public static void Build()
@@ -104,8 +104,12 @@ namespace Sprint0.Editor
                 }
             if (game.runner == null || game.runner.visual == null || game.puzzles.Length != PuzzleCount) throw new System.Exception("Invalid prototype configuration");
             foreach (var puzzle in game.puzzles)
+            {
                 if (puzzle.spawn == null || puzzle.exit == null || puzzle.boxes.Any(b => b == null)
                     || puzzle.plates.Any(p => p == null) || puzzle.hazards.Any(h => h == null)) throw new System.Exception("Invalid puzzle references");
+                if (puzzle.rotors.Any(r => r == null || r.handle == null || r.elbow == null || r.interior == null || r.walls.Length != 2 || r.walls.Any(w => w == null))
+                    || puzzle.clamps.Any(c => c == null || c.handle == null || c.socket == null)) throw new System.Exception("Invalid expansion references");
+            }
             Debug.Log($"[Gravity] Validated {components} components; no missing scripts/references; {game.puzzles.Length} configured puzzles.");
         }
 
@@ -139,7 +143,7 @@ namespace Sprint0.Editor
             root.AddComponent<NetworkObject>();
             var puzzle = root.AddComponent<GravityPuzzle>();
             puzzle.index = index;
-            puzzle.title = new[] { "벽으로 건너가기", "상자 주차", "두 갈래 배송", "공중 환승", "두 상자와 탈출로", "받고 다시 보내기", "둘 다 준비됐어?", "보관하고 길 열기" }[index];
+            puzzle.title = new[] { "벽으로 건너가기", "상자 주차", "두 갈래 배송", "공중 환승", "두 상자와 탈출로", "받고 다시 보내기", "둘 다 준비됐어?", "보관하고 길 열기", "앞에서 받고 뒤로 보내기", "돌려서 이어주기", "하나를 남겨두고", "배송팀" }[index];
             puzzle.objective = new[] {
                 "받침의 앞뒤를 확인하고 벽 너머로 건너가세요. 상대에게 출발 위치를 알려주세요.",
                 "P 홈에 상자를 보관하세요. 다음 중력에서도 압력판을 유지할 수 있을까요?",
@@ -148,7 +152,11 @@ namespace Sprint0.Editor
                 "P와 Q에 상자를 보관하고 탈출하세요. 분기 전환 전에 두 상자의 낙하 경로를 확인하세요.",
                 "상자를 A로 올린 뒤 천장의 스위치로 이동하세요. 내부 플레이어의 다음 행동을 기다렸다가 B로 배송하세요.",
                 "P와 Q의 발사 위치를 함께 준비하세요. 두 상자가 안착하면 뒤쪽 탈출 경로로 이동한 뒤 오른쪽 중력을 요청하세요.",
-                "P를 보관한 채 Q를 A로 올리세요. A를 지나 뒤쪽 천장 스위치를 열고, 탈출 경로로 빠진 뒤 B로 보내세요."
+                "P를 보관한 채 Q를 A로 올리세요. A를 지나 뒤쪽 천장 스위치를 열고, 탈출 경로로 빠진 뒤 B로 보내세요.",
+                "A 아래 창구와 B 위 창구 중 인계할 곳을 정하세요. 상자를 뒤쪽으로 넘기고 Q에 배송하세요.",
+                "내부 플레이어가 R1과 R2 통로를 회전시키고 조작자가 상자를 보냅니다. 상자가 통로 안에 있으면 돌릴 수 없습니다.",
+                "P에 도착한 상자를 E로 고정한 뒤 Q를 배송하세요. 중력을 바꾸기 전에 잠금 표시를 확인하세요.",
+                "P를 고정해 인계 창구를 열고, 두 번째 상자를 뒤로 넘겨 R1로 배송하세요. P 고정 후 R로 중간 재시도, Shift+R로 처음부터 시작합니다."
             }[index];
             var parent = root.transform;
             var wall = new Color(0.15f, 0.21f, 0.29f);
@@ -167,6 +175,7 @@ namespace Sprint0.Editor
             puzzle.hazards = System.Array.Empty<BoxCollider>();
             Vector3 exitPosition = new(10, 14.8f, 1.8f);
             Vector3 exitSize = new(2, 2, 1.4f);
+            if (index >= 8) BuildExpansion(puzzle, wall, out exitPosition, out exitSize);
             if (index == 0)
             {
                 Block(parent, "Front shelf — choose rear launch lane", new Vector3(-4.5f, 8, -1.4f), new Vector3(15, 0.5f, 3.2f), wall);
@@ -316,7 +325,7 @@ namespace Sprint0.Editor
             }
             foreach (var hazard in puzzle.hazards)
                 Hint(hazard, "위험 구역 · 빨강", "닿으면 현재 퍼즐이 처음 상태로 돌아갑니다.");
-            if (index == 2)
+            if (index == 2 || index >= 8)
                 foreach (var label in parent.GetComponentsInChildren<TextMesh>())
                     label.gameObject.AddComponent<GravityLandmark>();
             return puzzle;

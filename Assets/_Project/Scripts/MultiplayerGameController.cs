@@ -64,8 +64,12 @@ namespace Sprint0.Multiplayer
         bool isRefreshingRooms;
         float nextRoomRefreshTime;
         Font runtimeFont;
+        Button soloButton;
+        bool isInitializing;
+        bool SupportsSolo => sessionType == "Sprint0.GravityCoop";
+        public bool IsSoloMode { get; private set; }
 
-        public bool CanControlPlayer => activeSession != null && isGameStarted && !isSettingsOpen && !isBusy;
+        public bool CanControlPlayer => (IsSoloMode || activeSession != null) && isGameStarted && !isSettingsOpen && !isBusy;
         public int SceneBuildVersion => sceneBuildVersion;
         public bool HasGameStarted => isGameStarted;
         public GameObject GameHudScreen => gameHudScreen;
@@ -132,6 +136,7 @@ namespace Sprint0.Multiplayer
             EnsureLobbyScreen();
             ApplyRuntimeFont();
             BindButtons();
+            if (SupportsSolo) AddSoloButton();
             ShowMainScreen();
         }
 
@@ -139,6 +144,20 @@ namespace Sprint0.Multiplayer
         {
             // Scene Awake order is unspecified; NetworkManager.Singleton is ready by Start.
             BindNetworkCallbacks();
+            if (SupportsSolo)
+            {
+                SetMenuInteractable(true);
+                SetStatus("혼자 테스트하거나 멀티 방을 생성·참가하세요.");
+                return;
+            }
+            await EnsureOnlineReady();
+        }
+
+        async Task<bool> EnsureOnlineReady()
+        {
+            if (IsSoloMode || isInitializing) return false;
+            if (isReady) return true;
+            isInitializing = true;
             SetStatus("온라인 서비스에 연결 중...");
             SetMenuInteractable(false);
 
@@ -169,13 +188,15 @@ namespace Sprint0.Multiplayer
             }
             finally
             {
-                SetMenuInteractable(isReady);
+                isInitializing = false;
+                if (this != null) SetMenuInteractable(isReady || SupportsSolo);
             }
+            return isReady;
         }
 
         void Update()
         {
-            if (activeSession != null && Keyboard.current?.escapeKey.wasPressedThisFrame == true && !isBusy)
+            if ((IsSoloMode || activeSession != null) && Keyboard.current?.escapeKey.wasPressedThisFrame == true && !isBusy)
             {
                 SetSettingsOpen(!isSettingsOpen);
             }
@@ -292,6 +313,7 @@ namespace Sprint0.Multiplayer
 
         async void CreateRoom()
         {
+            if (!await EnsureOnlineReady()) return;
             if (!CanBeginOnlineAction())
             {
                 return;
@@ -330,8 +352,9 @@ namespace Sprint0.Multiplayer
             }
         }
 
-        void OpenRoomBrowser()
+        async void OpenRoomBrowser()
         {
+            if (!await EnsureOnlineReady()) return;
             if (!isReady || isBusy)
             {
                 return;
@@ -449,6 +472,12 @@ namespace Sprint0.Multiplayer
 
         async void LeaveSession()
         {
+            if (IsSoloMode && !isBusy)
+            {
+                isGameStarted = false;
+                StartCoroutine(ReloadSessionScene());
+                return;
+            }
             if (activeSession == null || isBusy)
             {
                 return;
@@ -766,12 +795,50 @@ namespace Sprint0.Multiplayer
 
         void SetMenuInteractable(bool interactable)
         {
+            if (soloButton != null) soloButton.interactable = !isInitializing && !isBusy;
             createRoomButton.interactable = interactable;
             openRoomBrowserButton.interactable = interactable;
             refreshRoomsButton.interactable = interactable;
             roomBrowserBackButton.interactable = interactable;
             lobbyStartButton.interactable = interactable && activeSession != null && activeSession.IsHost && activeSession.Players.Count >= minimumPlayersToStart;
             lobbyLeaveButton.interactable = interactable && activeSession != null;
+        }
+
+        void AddSoloButton()
+        {
+            soloButton = CreateButton(createRoomButton.transform.parent, "혼자 테스트 (좌우 분할)", out _);
+            SetAnchors((RectTransform)soloButton.transform, new Vector2(0.14f, 0.49f), new Vector2(0.86f, 0.59f), Vector2.zero, Vector2.zero);
+            SetAnchors((RectTransform)createRoomButton.transform, new Vector2(0.14f, 0.36f), new Vector2(0.86f, 0.46f), Vector2.zero, Vector2.zero);
+            SetAnchors((RectTransform)openRoomBrowserButton.transform, new Vector2(0.14f, 0.23f), new Vector2(0.86f, 0.33f), Vector2.zero, Vector2.zero);
+            SetAnchors((RectTransform)quitButton.transform, new Vector2(0.14f, 0.10f), new Vector2(0.86f, 0.20f), Vector2.zero, Vector2.zero);
+            createRoomButton.GetComponentInChildren<Text>().text = "멀티 · 방 생성";
+            openRoomBrowserButton.GetComponentInChildren<Text>().text = "멀티 · 방 참가";
+            soloButton.onClick.AddListener(StartSoloTest);
+        }
+
+        public void StartSoloTest()
+        {
+            var manager = NetworkManager.Singleton;
+            if (!SupportsSolo || IsSoloMode || activeSession != null || isBusy || isInitializing
+                || manager == null || manager.IsListening || manager.ShutdownInProgress) return;
+            var previousTransport = manager.NetworkConfig.NetworkTransport;
+            bool previousApproval = manager.NetworkConfig.ConnectionApproval;
+            manager.NetworkConfig.NetworkTransport = manager.gameObject.AddComponent<Sprint0.GravityCoop.OfflineTransport>();
+            manager.NetworkConfig.ConnectionApproval = false;
+            manager.ConnectionApprovalCallback = null;
+            IsSoloMode = true;
+            if (!manager.StartHost())
+            {
+                IsSoloMode = false;
+                Destroy(manager.NetworkConfig.NetworkTransport);
+                manager.NetworkConfig.NetworkTransport = previousTransport;
+                manager.NetworkConfig.ConnectionApproval = previousApproval;
+                BindNetworkCallbacks();
+                SetStatus("혼자 테스트를 시작하지 못했습니다.");
+                return;
+            }
+            EnterGameScreen();
+            leaveGameButton.GetComponentInChildren<Text>().text = "테스트 종료 · 모드 선택";
         }
 
         void SetStatus(string message)

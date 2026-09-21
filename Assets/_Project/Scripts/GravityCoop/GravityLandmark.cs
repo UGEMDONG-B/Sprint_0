@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace Sprint0.GravityCoop
 {
@@ -8,6 +9,12 @@ namespace Sprint0.GravityCoop
     public sealed class GravityLandmark : MonoBehaviour
     {
         void LateUpdate() => FaceCamera(Camera.main);
+        void OnEnable() => RenderPipelineManager.beginCameraRendering += BeforeCameraRender;
+        void OnDisable() => RenderPipelineManager.beginCameraRendering -= BeforeCameraRender;
+        void BeforeCameraRender(ScriptableRenderContext context, Camera camera)
+        {
+            if (GravityGame.Instance != null && GravityGame.Instance.IsSolo) FaceCamera(camera);
+        }
 
         public void FaceCamera(Camera camera)
         {

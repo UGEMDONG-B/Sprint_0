@@ -9,13 +9,14 @@ namespace Sprint0.GravityCoop
 {
     // Development-only, opt-in two-process integration test. No test controls in normal play.
     [DefaultExecutionOrder(1000)]
-    public sealed class GravitySmokeTest : MonoBehaviour
+    public sealed partial class GravitySmokeTest : MonoBehaviour
     {
         GravityGame game;
         NetworkManager manager;
         bool failed;
         int checks;
         bool checkCamera;
+        bool solo;
         const string Channel = "GravitySmokeInput";
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -36,14 +37,16 @@ namespace Sprint0.GravityCoop
             Application.runInBackground = true;
             Application.targetFrameRate = 60;
             manager = NetworkManager.Singleton;
+            solo = Array.IndexOf(Environment.GetCommandLineArgs(), "-gravitySolo") >= 0;
             // The disabled online controller normally registers the approval callback.
             // Loopback tests connect directly; production lobby approval is unchanged.
             manager.NetworkConfig.ConnectionApproval = false;
             manager.GetComponent<Unity.Netcode.Transports.UTP.UnityTransport>().SetConnectionData("127.0.0.1", 7777, "0.0.0.0");
-            if (Array.IndexOf(Environment.GetCommandLineArgs(), "-gravityHost") >= 0) manager.StartHost();
+            if (solo) Sprint0.Multiplayer.MultiplayerGameController.Instance.StartSoloTest();
+            else if (Array.IndexOf(Environment.GetCommandLineArgs(), "-gravityHost") >= 0) manager.StartHost();
             else manager.StartClient();
             float until = Time.realtimeSinceStartup + 45;
-            if (manager.IsServer)
+            if (manager.IsServer && !solo)
             {
                 while (manager.ConnectedClientsIds.Count < 2 && Time.realtimeSinceStartup < until) yield return null;
                 yield return new WaitForSeconds(0.3f);
@@ -69,10 +72,18 @@ namespace Sprint0.GravityCoop
                 checkCamera = true;
                 while (checkCamera) yield return null;
                 Capture("runner");
-                float deadline = Time.realtimeSinceStartup + 540;
-                while (game != null && !game.Finished.Value && manager.IsConnectedClient && Time.realtimeSinceStartup < deadline) yield return null;
+                float deadline = Time.realtimeSinceStartup + 900;
+                bool sawRotor = false, sawAnchor = false, sawCheckpoint = false;
+                while (game != null && !game.Finished.Value && manager.IsConnectedClient && Time.realtimeSinceStartup < deadline)
+                {
+                    foreach (var rotor in game.Current.rotors) sawRotor |= rotor.Turned.Value;
+                    foreach (var box in game.Current.boxes) sawAnchor |= box.Anchored.Value;
+                    sawCheckpoint |= game.Current.CheckpointSaved.Value;
+                    yield return null;
+                }
                 if (game == null || !game.Finished.Value) { Fail("Client disconnected or timed out before completion"); yield break; }
                 Check(game.Puzzle.Value == game.puzzles.Length - 1 && game.Current.DoorOpen.Value, "CLIENT final state synchronized");
+                Check(sawRotor && sawAnchor && sawCheckpoint, "CLIENT receives rotor, anchor and checkpoint states");
                 Debug.Log("[GravityTest] CLIENT PASS");
                 yield return new WaitForSeconds(4);
                 Application.Quit(failed ? 1 : 0);
@@ -80,12 +91,36 @@ namespace Sprint0.GravityCoop
             }
             yield return new WaitForSeconds(1);
             Capture("operator");
-            Check(Camera.main.orthographic, "Operator retains overview camera");
-            foreach (var renderer in game.runner.visual.GetComponentsInChildren<Renderer>(true))
-                Check(!renderer.forceRenderingOff, "Runner remains visible to operator");
+            if (solo)
+            {
+                Check(manager.NetworkConfig.NetworkTransport is OfflineTransport, "Solo uses socket-free transport");
+                Check(manager.ConnectedClientsIds.Count == 1 && game.IsSolo, "Solo starts without a second peer");
+                Check(Camera.main.rect == new Rect(0.5f, 0, 0.5f, 1) && !Camera.main.orthographic, "Right half is first person");
+                Check(game.ObserverCamera.rect == new Rect(0, 0, 0.5f, 1) && game.ObserverCamera.orthographic, "Left half is operator overview");
+                var flow = Sprint0.Multiplayer.MultiplayerGameController.Instance;
+                Check(flow.CanControlPlayer, "Solo enables both controls");
+                flow.OpenSettings();
+                Check(!flow.CanControlPlayer, "Solo settings suspend input");
+                typeof(Sprint0.Multiplayer.MultiplayerGameController).GetMethod("SetSettingsOpen", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                    .Invoke(flow, new object[] { false });
+                Check(flow.CanControlPlayer, "Solo resumes from settings");
+                Capture("solo");
+            }
+            else
+            {
+                Check(Camera.main.orthographic, "Operator retains overview camera");
+                foreach (var renderer in game.runner.visual.GetComponentsInChildren<Renderer>(true))
+                    Check(!renderer.forceRenderingOff, "Runner remains visible to operator");
+            }
             Check(game.Direction.Value == GravityDirection.Down, "Runner cannot change gravity");
             foreach (var root in game.gameObject.scene.GetRootGameObjects())
                 foreach (var component in root.GetComponentsInChildren<Component>(true)) Check(component != null, "No missing component");
+            if (Array.IndexOf(Environment.GetCommandLineArgs(), "-gravityExpansion") >= 0)
+            {
+                game.Puzzle.Value = 8;
+                game.ResetSection(true);
+                goto Expansion;
+            }
             if (Array.IndexOf(Environment.GetCommandLineArgs(), "-gravityCoopLabs") >= 0)
             {
                 game.Puzzle.Value = 5;
@@ -189,8 +224,11 @@ namespace Sprint0.GravityCoop
             yield return VerifyCarrying();
             game.ResetSection();
             yield return Wait(0.5f);
-            game.InteractRpc();
-            Check(game.HeldBox.Value == -1, "Operator cannot pick up crates");
+            if (!solo)
+            {
+                game.InteractRpc();
+                Check(game.HeldBox.Value == -1, "Operator cannot pick up crates");
+            }
             Input(Vector2.zero, false, true);
             yield return Wait(0.25f);
             Check(game.HeldBox.Value == 0, "Pickup via client RPC");
@@ -396,7 +434,11 @@ namespace Sprint0.GravityCoop
             Check(game.Current.Pressed.Value == 3, "P8 both switches open exit");
             yield return MoveY(5.8f);
             yield return EnterExit(7);
-            Check(game.Finished.Value, "Puzzle 8 completed");
+            Check(game.Puzzle.Value == 8 && !game.Finished.Value, "Puzzle 8 advances to expansion");
+            if (failed) yield break;
+            Expansion:
+            yield return RunExpansion();
+            if (failed) yield break;
             Debug.Log($"[GravityTest] HOST {(failed ? "FAIL" : "PASS")} {checks} checks");
             yield return new WaitForSeconds(2);
             Application.Quit(failed ? 1 : 0);
@@ -428,6 +470,13 @@ namespace Sprint0.GravityCoop
 
         void Input(Vector2 move, bool jump = false, bool interact = false, float lookYaw = float.NaN)
         {
+            if (solo)
+            {
+                if (float.IsFinite(lookYaw)) game.LookRpc(lookYaw);
+                game.MoveRpc(move, jump);
+                if (interact) game.InteractRpc();
+                return;
+            }
             using var writer = new FastBufferWriter(32, Allocator.Temp);
             writer.WriteValueSafe(move);
             writer.WriteValueSafe(jump);

@@ -9,6 +9,7 @@ namespace Sprint0.GravityCoop
         public bool affectedByGravity = true;
         public int puzzleIndex;
         public bool carryable = true;
+        public NetworkVariable<bool> Anchored = new();
         public Rigidbody Body { get; private set; }
         Vector3 initialPosition;
         Quaternion initialRotation;
@@ -24,6 +25,7 @@ namespace Sprint0.GravityCoop
 
         public void Restore()
         {
+            Anchored.Value = false;
             Body.isKinematic = false;
             Body.linearVelocity = Vector3.zero;
             Body.angularVelocity = Vector3.zero;
@@ -32,11 +34,23 @@ namespace Sprint0.GravityCoop
             GetComponent<Unity.Netcode.Components.NetworkTransform>().Teleport(initialPosition, initialRotation, transform.localScale);
         }
 
+        public void SetAnchored(bool anchored)
+        {
+            if (!IsServer) return;
+            if (!Body.isKinematic)
+            {
+                Body.linearVelocity = Vector3.zero;
+                Body.angularVelocity = Vector3.zero;
+            }
+            Anchored.Value = anchored;
+            Body.isKinematic = anchored;
+        }
+
         void FixedUpdate()
         {
             if (!IsServer || GravityGame.Instance == null) return;
             var game = GravityGame.Instance;
-            bool active = game.Playing && game.Puzzle.Value == puzzleIndex && !game.IsHeld(this);
+            bool active = game.Playing && game.Puzzle.Value == puzzleIndex && !game.IsHeld(this) && !Anchored.Value;
             Body.isKinematic = !active || !affectedByGravity;
             if (active && affectedByGravity) Body.AddForce(game.Down * game.gravityStrength, ForceMode.Acceleration);
         }
