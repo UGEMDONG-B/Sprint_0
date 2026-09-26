@@ -8,6 +8,12 @@ EditorBuildSettings:
   - enabled: 1
     path: Assets/Scenes/SampleScene.unity
     guid: 99c9720ab356a0642a771bea13969a05
+  - enabled: 1
+    path: Assets/RaftGame_hyunwoo/Scenes/RaftLobby.unity
+    guid: 7f2b0c5a9d7e4a63a18c62be403a109d
+  - enabled: 1
+    path: Assets/RaftGame_hyunwoo/Scenes/Main.unity
+    guid: 510ed79caf779ef408e00c60bd3b7c24
   m_configObjects:
     com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 052faaac586de48259a63d0c4782560b, type: 3}
   m_UseUCBPForAssetBundles: 0
